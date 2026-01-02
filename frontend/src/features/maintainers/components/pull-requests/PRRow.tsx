@@ -136,9 +136,40 @@ export function PRRow({ pr }: PRRowProps) {
       {/* Repository Info */}
       <div>
         <div className="flex items-center gap-2 mb-1">
-          <div className="w-5 h-5 rounded-md bg-gradient-to-br from-[#c9983a] to-[#d4af37] flex items-center justify-center">
-            <Package className="w-3 h-3 text-white" />
-          </div>
+          {(() => {
+            const [owner] = pr.org ? [pr.org] : pr.repo.split('/');
+            const repoAvatarUrl = `https://github.com/${owner}.png?size=20`;
+            return (
+              <img
+                src={repoAvatarUrl}
+                alt={pr.repo}
+                className="w-5 h-5 rounded-md border border-[#c9983a]/40"
+                onError={(e) => {
+                  // Fallback to icon if image fails to load
+                  const target = e.target as HTMLImageElement;
+                  target.style.display = 'none';
+                  const parent = target.parentElement;
+                  if (parent) {
+                    const fallback = document.createElement('div');
+                    fallback.className = 'w-5 h-5 rounded-md bg-gradient-to-br from-[#c9983a] to-[#d4af37] flex items-center justify-center';
+                    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                    svg.setAttribute('class', 'w-3 h-3 text-white');
+                    svg.setAttribute('fill', 'none');
+                    svg.setAttribute('stroke', 'currentColor');
+                    svg.setAttribute('viewBox', '0 0 24 24');
+                    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    path.setAttribute('stroke-linecap', 'round');
+                    path.setAttribute('stroke-linejoin', 'round');
+                    path.setAttribute('stroke-width', '2');
+                    path.setAttribute('d', 'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4');
+                    svg.appendChild(path);
+                    fallback.appendChild(svg);
+                    parent.insertBefore(fallback, target);
+                  }
+                }}
+              />
+            );
+          })()}
           <span className={`text-[13px] font-bold ${
             theme === 'dark' ? 'text-[#e8dfd0]' : 'text-[#2d2820]'
           }`}>{pr.repo}</span>

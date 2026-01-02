@@ -288,6 +288,18 @@ export function MaintainersPage({ onNavigate }: MaintainersPageProps) {
                                     }}
                                   />
                                   <div className="flex items-center gap-2 flex-1">
+                                    {failedAvatars.has(getRepoAvatar(repo.fullName, 20)) ? (
+                                      <div className="w-5 h-5 rounded-md bg-gradient-to-br from-[#c9983a] to-[#d4af37] flex items-center justify-center flex-shrink-0">
+                                        <Package className="w-3 h-3 text-white" />
+                                      </div>
+                                    ) : (
+                                      <img
+                                        src={getRepoAvatar(repo.fullName, 20)}
+                                        alt={repo.name}
+                                        className="w-5 h-5 rounded-md border border-[#c9983a]/40 flex-shrink-0"
+                                        onError={() => setFailedAvatars(prev => new Set(prev).add(getRepoAvatar(repo.fullName, 20)))}
+                                      />
+                                    )}
                                     <span className={`text-[14px] font-semibold group-hover/subrepo:text-[#c9983a] transition-colors ${
                                       theme === 'dark' ? 'text-[#e8dfd0]' : 'text-[#2d2820]'
                                     }`}>
