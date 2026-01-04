@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -114,9 +115,23 @@ func (h *ProjectsHandler) Mine() fiber.Handler {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "db_not_configured"})
 		}
 
-		sub, _ := c.Locals(auth.LocalUserID).(string)
+		sub, ok := c.Locals(auth.LocalUserID).(string)
+		if !ok || sub == "" {
+			slog.Warn("projects/mine: missing or invalid user_id in context",
+				"user_id_type", fmt.Sprintf("%T", c.Locals(auth.LocalUserID)),
+				"user_id_value", c.Locals(auth.LocalUserID),
+				"request_id", c.Locals("requestid"),
+			)
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid_user"})
+		}
+		
 		userID, err := uuid.Parse(sub)
 		if err != nil {
+			slog.Warn("projects/mine: failed to parse user_id as UUID",
+				"user_id", sub,
+				"error", err,
+				"request_id", c.Locals("requestid"),
+			)
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid_user"})
 		}
 
