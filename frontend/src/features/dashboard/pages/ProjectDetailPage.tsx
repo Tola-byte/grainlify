@@ -1,7 +1,8 @@
-import { useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { ExternalLink, Copy, ThumbsUp, ThumbsDown, GitPullRequest, CircleDot, ArrowLeft } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { useParams } from 'react-router-dom';
+import { ExternalLink, Copy, CircleDot, ArrowLeft } from 'lucide-react';
 import { useTheme } from '../../../shared/contexts/ThemeContext';
+import { getPublicProject, getPublicProjectIssues, getPublicProjectPRs } from '../../../shared/api/client';
 
 interface ProjectDetailPageProps {
   onBack?: () => void;
@@ -16,87 +17,151 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
   const projectId = propProjectId || paramProjectId;
   const [activeIssueTab, setActiveIssueTab] = useState('all');
   const [copiedLink, setCopiedLink] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [project, setProject] = useState<null | Awaited<ReturnType<typeof getPublicProject>>>(null);
+  const [issues, setIssues] = useState<Array<{
+    github_issue_id: number;
+    number: number;
+    state: string;
+    title: string;
+    description: string | null;
+    author_login: string;
+    labels: any[];
+    url: string;
+    updated_at: string | null;
+    last_seen_at: string;
+  }>>([]);
+  const [prs, setPRs] = useState<Array<{
+    github_pr_id: number;
+    number: number;
+    state: string;
+    title: string;
+    author_login: string;
+    url: string;
+    merged: boolean;
+    created_at: string | null;
+    updated_at: string | null;
+    closed_at: string | null;
+    merged_at: string | null;
+    last_seen_at: string;
+  }>>([]);
 
-  // Mock project data - in a real app, this would come from an API
-  const project = {
-    id: projectId,
-    name: 'Vue.js',
-    tagline: 'Progressive JavaScript framework for building user interfaces',
-    logo: 'https://images.unsplash.com/photo-1633356122544-f134324a6cee?w=400&h=400&fit=crop',
-    githubUrl: 'https://github.com/vuejs/core',
-    websiteUrl: 'https://vuejs.org',
-    description: 'Vue.js is a progressive JavaScript framework for building user interfaces. Unlike other monolithic frameworks, Vue is designed from the ground up to be incrementally adoptable. The core library is focused on the view layer only, and is easy to pick up and integrate with other libraries or existing projects.',
-    languages: [
-      { name: 'TypeScript', percentage: 85 },
-      { name: 'JavaScript', percentage: 15 },
-    ],
-    ecosystems: ['Web'],
-    categories: ['Frontend'],
-    maintainers: [
-      { id: '1', name: 'octocat', avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop' },
-    ],
-    contributors: [
-      { id: '1', name: 'octocat', avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop' },
-      { id: '2', name: 'developer', avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&h=100&fit=crop' },
-      { id: '3', name: 'contributor1', avatar: 'https://images.unsplash.com/photo-1599566150163-29194dcaad36?w=100&h=100&fit=crop' },
-    ],
-    totalContributors: 6,
+  useEffect(() => {
+    let cancelled = false;
+
+    const load = async () => {
+      if (!projectId) return;
+      setIsLoading(true);
+      setError(null);
+      try {
+        const [p, i, pr] = await Promise.all([
+          getPublicProject(projectId),
+          getPublicProjectIssues(projectId),
+          getPublicProjectPRs(projectId),
+        ]);
+        if (cancelled) return;
+        setProject(p);
+        setIssues(i.issues || []);
+        setPRs(pr.prs || []);
+      } catch (e) {
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : 'Failed to load project');
+      } finally {
+        if (cancelled) return;
+        setIsLoading(false);
+      }
+    };
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+
+  const repoName = useMemo(() => {
+    const full = project?.github_full_name || '';
+    const parts = full.split('/');
+    return parts[1] || full || 'Project';
+  }, [project?.github_full_name]);
+
+  const ownerLogin = project?.repo?.owner_login || (project?.github_full_name?.split('/')[0] || '');
+  const ownerAvatar =
+    project?.repo?.owner_avatar_url ||
+    (ownerLogin ? `https://github.com/${ownerLogin}.png?size=200` : '');
+
+  const githubUrl = project?.repo?.html_url || (project?.github_full_name ? `https://github.com/${project.github_full_name}` : '');
+  const websiteUrl = project?.repo?.homepage || '';
+  const description = project?.repo?.description || '';
+
+  const languages = useMemo(() => {
+    const list = (project?.languages || [])
+      .slice()
+      .sort((a, b) => b.percentage - a.percentage)
+      .map((l) => ({ name: l.name, percentage: Math.round(l.percentage) }));
+    return list.length ? list : (project?.language ? [{ name: project.language, percentage: 100 }] : []);
+  }, [project?.languages, project?.language]);
+
+  const labelName = (l: any): string | null => {
+    if (!l) return null;
+    if (typeof l === 'string') return l;
+    if (typeof l?.name === 'string') return l.name;
+    return null;
   };
 
-  const issues = [
-    {
-      id: '1234',
-      title: 'Add support for new React hooks',
-      tags: ['enhancement', 'good first issue'],
-      timeAgo: '7 days ago',
-      author: { name: 'octocat', avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100&h=100&fit=crop' },
-      repository: 'react-project',
-    },
-    {
-      id: '1235',
-      title: 'Improve documentation for API endpoints',
-      tags: ['documentation'],
-      timeAgo: '5 days ago',
-      author: { name: 'developer', avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&h=100&fit=crop' },
-      repository: 'react-project',
-    },
-    {
-      id: '1236',
-      title: 'Fix memory leak in component lifecycle',
-      tags: ['bug'],
-      timeAgo: '3 days ago',
-      author: { name: 'bugreporter', avatar: 'https://images.unsplash.com/photo-1599566150163-29194dcaad36?w=100&h=100&fit=crop' },
-      repository: 'react-project',
-    },
-  ];
+  const issueTabs = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const it of issues) {
+      const labels = Array.isArray(it.labels) ? it.labels : [];
+      for (const l of labels) {
+        const name = labelName(l);
+        if (!name) continue;
+        counts.set(name, (counts.get(name) || 0) + 1);
+      }
+    }
+    const top = Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([name, count]) => ({ id: name, label: name, count }));
+    return [{ id: 'all', label: 'All issues', count: issues.length }, ...top];
+  }, [issues]);
 
-  const issueTabs = [
-    { id: 'all', label: 'All issues', count: 14 },
-    { id: 'enhancement', label: 'enhancement', count: 5 },
-    { id: 'bug', label: 'bug', count: 3 },
-    { id: 'documentation', label: 'documentation', count: 2 },
-    { id: 'good-first-issue', label: 'good first issue', count: 4 },
-  ];
+  const filteredIssues = useMemo(() => {
+    if (activeIssueTab === 'all') return issues;
+    return issues.filter((it) => (Array.isArray(it.labels) ? it.labels : []).some((l) => labelName(l) === activeIssueTab));
+  }, [issues, activeIssueTab]);
 
-  const recentActivity = [
-    {
-      type: 'pr',
-      number: '1234',
-      title: 'Add support for new React hooks',
-      date: '31 Dec.',
-    },
-    {
-      type: 'pr',
-      number: '5678',
-      title: 'Fix memory leak in component lifecycle',
-      date: '01 Jan.',
-    },
-    {
-      type: 'review',
-      title: 'Review: Improve type safety in API client',
-      date: '22 Dec.',
-    },
-  ];
+  const timeAgo = (iso?: string | null) => {
+    const s = iso || '';
+    const d = s ? new Date(s) : null;
+    if (!d || Number.isNaN(d.getTime())) return '';
+    const diffMs = Date.now() - d.getTime();
+    const mins = Math.floor(diffMs / 60000);
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ago`;
+  };
+
+  const contributors = useMemo(() => {
+    const uniq = new Map<string, { name: string; avatar: string }>();
+    for (const it of [...issues, ...prs]) {
+      const login = (it as any).author_login;
+      if (!login || uniq.has(login)) continue;
+      uniq.set(login, { name: login, avatar: `https://github.com/${login}.png?size=80` });
+      if (uniq.size >= 6) break;
+    }
+    return Array.from(uniq.values());
+  }, [issues, prs]);
+
+  const recentPRs = useMemo(() => {
+    return prs.slice(0, 3).map((p) => ({
+      number: String(p.number),
+      title: p.title,
+      date: (p.updated_at || p.last_seen_at || '').slice(0, 10),
+    }));
+  }, [prs]);
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(window.location.href);
@@ -116,8 +181,8 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
         }`}>
           <div className="aspect-square rounded-[20px] overflow-hidden bg-gradient-to-br from-[#c9983a]/20 to-[#d4af37]/10">
             <img 
-              src={project.logo} 
-              alt={project.name}
+              src={ownerAvatar || 'https://github.com/github.png?size=200'} 
+              alt={repoName}
               className="w-full h-full object-cover"
             />
           </div>
@@ -133,8 +198,9 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
             theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'
           }`}>Community</h3>
           <div className="flex flex-col gap-2">
+            {!!websiteUrl && (
             <a
-              href={project.websiteUrl}
+                href={websiteUrl}
               target="_blank"
               rel="noopener noreferrer"
               className={`flex items-center gap-2 px-4 py-2.5 rounded-[12px] backdrop-blur-[20px] border border-white/25 hover:bg-white/[0.2] transition-all text-[13px] font-semibold ${
@@ -144,8 +210,9 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
               <ExternalLink className="w-4 h-4" />
               Website
             </a>
+            )}
             <a
-              href={project.githubUrl}
+              href={githubUrl}
               target="_blank"
               rel="noopener noreferrer"
               className={`flex items-center gap-2 px-4 py-2.5 rounded-[12px] backdrop-blur-[20px] border border-white/25 hover:bg-white/[0.2] transition-all text-[13px] font-semibold ${
@@ -153,7 +220,7 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
               }`}
             >
               <ExternalLink className="w-4 h-4" />
-              Website
+              GitHub
             </a>
           </div>
         </div>
@@ -168,7 +235,7 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
             theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'
           }`}>Languages</h3>
           <div className="space-y-3">
-            {project.languages.map((lang, idx) => (
+            {languages.length ? languages.map((lang, idx) => (
               <div key={idx}>
                 <div className="flex items-center justify-between mb-1.5">
                   <span className={`text-[13px] font-semibold transition-colors ${
@@ -183,7 +250,11 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
                   />
                 </div>
               </div>
-            ))}
+            )) : (
+              <div className={`text-[13px] ${theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'}`}>
+                {isLoading ? 'Loading…' : 'No language data'}
+              </div>
+            )}
           </div>
         </div>
 
@@ -197,14 +268,14 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
             theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'
           }`}>Ecosystems</h3>
           <div className="flex flex-wrap gap-2">
-            {project.ecosystems.map((eco, idx) => (
+            {(project?.ecosystem_name ? [project.ecosystem_name] : []).map((eco, idx) => (
               <span
                 key={idx}
                 className={`px-3 py-1.5 rounded-[8px] text-[12px] font-bold backdrop-blur-[20px] border border-white/25 transition-colors ${
                   theme === 'dark' ? 'bg-white/[0.08] text-[#f5f5f5]' : 'bg-white/[0.08] text-[#2d2820]'
                 }`}
               >
-                W {eco}
+                {eco}
               </span>
             ))}
           </div>
@@ -220,7 +291,7 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
             theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'
           }`}>Categories</h3>
           <div className="flex flex-wrap gap-2">
-            {project.categories.map((cat, idx) => (
+            {(project?.category ? [project.category] : []).map((cat, idx) => (
               <span
                 key={idx}
                 className={`px-3 py-1.5 rounded-[8px] text-[12px] font-bold backdrop-blur-[20px] border border-white/25 transition-colors ${
@@ -233,7 +304,7 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
           </div>
         </div>
 
-        {/* Maintainers */}
+        {/* Owner */}
         <div className={`backdrop-blur-[40px] rounded-[24px] border p-6 transition-colors ${
           theme === 'dark'
             ? 'bg-white/[0.12] border-white/20'
@@ -241,20 +312,24 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
         }`}>
           <h3 className={`text-[16px] font-bold mb-4 transition-colors ${
             theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'
-          }`}>Maintainers</h3>
+          }`}>Owner</h3>
           <div className="space-y-3">
-            {project.maintainers.map((maintainer) => (
-              <div key={maintainer.id} className="flex items-center gap-3">
+            {ownerLogin ? (
+              <div className="flex items-center gap-3">
                 <img 
-                  src={maintainer.avatar} 
-                  alt={maintainer.name}
+                  src={ownerAvatar} 
+                  alt={ownerLogin}
                   className="w-8 h-8 rounded-full border-2 border-[#c9983a]/30"
                 />
                 <span className={`text-[13px] font-semibold transition-colors ${
                   theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'
-                }`}>{maintainer.name}</span>
+                }`}>{ownerLogin}</span>
               </div>
-            ))}
+            ) : (
+              <div className={`text-[13px] ${theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'}`}>
+                {isLoading ? 'Loading…' : 'Unknown'}
+              </div>
+            )}
           </div>
         </div>
 
@@ -269,9 +344,9 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
           }`}>Contributors</h3>
           <div className="flex items-center gap-2 mb-3">
             <div className="flex -space-x-2">
-              {project.contributors.slice(0, 3).map((contributor) => (
+              {contributors.slice(0, 3).map((contributor) => (
                 <img 
-                  key={contributor.id}
+                  key={contributor.name}
                   src={contributor.avatar} 
                   alt={contributor.name}
                   className="w-8 h-8 rounded-full border-2 border-[#c9983a]/30"
@@ -282,7 +357,9 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
           <p className={`text-[12px] transition-colors ${
             theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'
           }`}>
-            {project.contributors.slice(0, 2).map(c => c.name).join(', ')} and {project.totalContributors - 2} others
+            {contributors.length
+              ? `${contributors.slice(0, 2).map(c => c.name).join(', ')}${project?.contributors_count && project.contributors_count > 2 ? ` and ${project.contributors_count - 2} others` : ''}`
+              : (isLoading ? 'Loading…' : 'No contributors yet')}
           </p>
         </div>
       </div>
@@ -314,14 +391,14 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
             <div>
               <h1 className={`text-[32px] font-bold mb-2 transition-colors ${
                 theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'
-              }`}>{project.name}</h1>
+              }`}>{repoName}</h1>
               <p className={`text-[15px] transition-colors ${
                 theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'
-              }`}>{project.tagline}</p>
+              }`}>{description || project?.github_full_name || ''}</p>
             </div>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => window.open(project.githubUrl, '_blank')}
+                onClick={() => githubUrl && window.open(githubUrl, '_blank')}
                 className={`p-3 rounded-[12px] backdrop-blur-[20px] border border-white/25 hover:bg-white/[0.2] transition-all ${
                   theme === 'dark' ? 'bg-white/[0.08] text-[#f5f5f5]' : 'bg-white/[0.08] text-[#2d2820]'
                 }`}
@@ -341,6 +418,13 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
               </button>
             </div>
           </div>
+          {error && (
+            <div className={`mt-4 p-4 rounded-[16px] border ${
+              theme === 'dark' ? 'bg-red-500/10 border-red-500/30 text-red-400' : 'bg-red-500/10 border-red-500/30 text-red-600'
+            }`}>
+              <p className="text-[14px] font-semibold">{error}</p>
+            </div>
+          )}
         </div>
 
         {/* Overview */}
@@ -354,25 +438,13 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
               theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'
             }`}>
               <span className="text-[#c9983a]">✦</span>
-              Overview by OnlyDust
+              Overview
             </h2>
-            <div className="flex items-center gap-2">
-              <button className={`p-2 rounded-[10px] backdrop-blur-[20px] border border-white/25 hover:bg-white/[0.2] transition-all ${
-                theme === 'dark' ? 'bg-white/[0.08] text-[#f5f5f5]' : 'bg-white/[0.08] text-[#2d2820]'
-              }`}>
-                <ThumbsUp className="w-4 h-4" />
-              </button>
-              <button className={`p-2 rounded-[10px] backdrop-blur-[20px] border border-white/25 hover:bg-white/[0.2] transition-all ${
-                theme === 'dark' ? 'bg-white/[0.08] text-[#f5f5f5]' : 'bg-white/[0.08] text-[#2d2820]'
-              }`}>
-                <ThumbsDown className="w-4 h-4" />
-              </button>
-            </div>
           </div>
           <p className={`text-[15px] leading-relaxed transition-colors ${
             theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#4a3f2f]'
           }`}>
-            {project.description}
+            {description || (isLoading ? 'Loading…' : 'No description available.')}
           </p>
         </div>
 
@@ -407,13 +479,13 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
 
           {/* Issue List */}
           <div className="space-y-4">
-            {issues.map((issue) => (
+            {filteredIssues.map((issue) => (
               <div
-                key={issue.id}
+                key={issue.github_issue_id}
                 className={`p-6 rounded-[16px] backdrop-blur-[25px] border border-white/25 hover:bg-white/[0.15] transition-all cursor-pointer ${
                   theme === 'dark' ? 'bg-white/[0.08]' : 'bg-white/[0.08]'
                 }`}
-                onClick={() => onIssueClick && onIssueClick(issue.id)}
+                onClick={() => onIssueClick && onIssueClick(String(issue.github_issue_id))}
               >
                 <div className="flex items-start justify-between mb-3">
                   <div className="flex items-start gap-3 flex-1">
@@ -425,40 +497,51 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
                 </div>
                 <div className="flex items-center justify-between ml-8">
                   <div className="flex items-center gap-2">
-                    {issue.tags.map((tag, idx) => (
+                    {(Array.isArray(issue.labels) ? issue.labels : [])
+                      .map((l) => labelName(l))
+                      .filter(Boolean)
+                      .slice(0, 4)
+                      .map((tag, idx) => (
                       <span
                         key={idx}
                         className={`px-3 py-1 rounded-[6px] text-[11px] font-bold backdrop-blur-[20px] border border-white/20 transition-colors ${
                           theme === 'dark' ? 'bg-white/[0.1] text-[#d4d4d4]' : 'bg-white/[0.1] text-[#4a3f2f]'
                         }`}
                       >
-                        {tag}
+                        {String(tag)}
                       </span>
                     ))}
                   </div>
                   <div className="flex items-center gap-3">
                     <span className={`text-[12px] transition-colors ${
                       theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'
-                    }`}>{issue.timeAgo}</span>
+                    }`}>{timeAgo(issue.updated_at || issue.last_seen_at)}</span>
                     <div className="flex items-center gap-2">
                       <img 
-                        src={issue.author.avatar} 
-                        alt={issue.author.name}
+                        src={`https://github.com/${issue.author_login}.png?size=40`} 
+                        alt={issue.author_login}
                         className="w-5 h-5 rounded-full border border-[#c9983a]/30"
                       />
                       <span className={`text-[12px] font-semibold transition-colors ${
                         theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'
-                      }`}>By {issue.author.name}</span>
+                      }`}>By {issue.author_login}</span>
                     </div>
                     <span className={`px-2 py-1 rounded-[6px] text-[11px] font-bold backdrop-blur-[20px] border border-white/20 transition-colors ${
                       theme === 'dark' ? 'bg-white/[0.1] text-[#d4d4d4]' : 'bg-white/[0.1] text-[#4a3f2f]'
                     }`}>
-                      📦 {issue.repository}
+                      📦 {repoName}
                     </span>
                   </div>
                 </div>
               </div>
             ))}
+            {!isLoading && filteredIssues.length === 0 && (
+              <div className={`p-6 rounded-[16px] border text-center ${
+                theme === 'dark' ? 'bg-white/[0.08] border-white/15 text-[#d4d4d4]' : 'bg-white/[0.15] border-white/25 text-[#7a6b5a]'
+              }`}>
+                <p className="text-[14px] font-semibold">No issues found</p>
+              </div>
+            )}
           </div>
         </div>
 
@@ -472,7 +555,7 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
             theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'
           }`}>Recent Activity</h2>
           <div className="space-y-3">
-            {recentActivity.map((activity, idx) => (
+            {recentPRs.map((activity, idx) => (
               <div
                 key={idx}
                 className={`flex items-center justify-between p-4 rounded-[12px] backdrop-blur-[20px] border border-white/20 hover:bg-white/[0.15] transition-all ${
@@ -480,27 +563,25 @@ export function ProjectDetailPage({ onBack, onIssueClick, projectId: propProject
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  {activity.type === 'pr' && (
-                    <>
                       <div className="px-2 py-1 rounded-[6px] bg-[#4ade80]/20 border border-[#4ade80]/30">
                         <span className="text-[11px] font-bold text-[#4ade80]">#{activity.number}</span>
                       </div>
                       <span className={`text-[14px] font-semibold transition-colors ${
                         theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'
                       }`}>{activity.title}</span>
-                    </>
-                  )}
-                  {activity.type === 'review' && (
-                    <span className={`text-[14px] font-semibold transition-colors ${
-                      theme === 'dark' ? 'text-[#f5f5f5]' : 'text-[#2d2820]'
-                    }`}>{activity.title}</span>
-                  )}
                 </div>
                 <span className={`text-[13px] transition-colors ${
                   theme === 'dark' ? 'text-[#d4d4d4]' : 'text-[#7a6b5a]'
                 }`}>{activity.date}</span>
               </div>
             ))}
+            {!isLoading && recentPRs.length === 0 && (
+              <div className={`p-6 rounded-[16px] border text-center ${
+                theme === 'dark' ? 'bg-white/[0.08] border-white/15 text-[#d4d4d4]' : 'bg-white/[0.15] border-white/25 text-[#7a6b5a]'
+              }`}>
+                <p className="text-[14px] font-semibold">No recent pull requests</p>
+              </div>
+            )}
           </div>
         </div>
       </div>

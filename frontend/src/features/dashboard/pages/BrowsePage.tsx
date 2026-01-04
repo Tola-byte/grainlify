@@ -148,23 +148,30 @@ export function BrowsePage({ onProjectClick }: BrowsePageProps) {
 
         const response = await getPublicProjects(params);
         
+        // Check if response and projects array exist
+        if (!response || !response.projects || !Array.isArray(response.projects)) {
+          throw new Error('Invalid response format from server');
+        }
+        
         // Map API response to Project interface
-        const mappedProjects: Project[] = response.projects.map((p) => {
-          const repoName = p.github_full_name.split('/')[1] || p.github_full_name;
-          return {
-            id: p.id,
-            name: repoName,
-            icon: getProjectIcon(p.github_full_name),
-            stars: formatNumber(p.stars_count),
-            forks: formatNumber(p.forks_count),
-            contributors: 0, // Not available in API yet
-            openIssues: 0, // Not available in API yet
-            prs: 0, // Not available in API yet
-            description: `${p.language || 'Project'} repository${p.category ? ` - ${p.category}` : ''}`,
-            tags: p.tags || [],
-            color: getProjectColor(repoName),
-          };
-        });
+        const mappedProjects: Project[] = response.projects
+          .filter((p) => p && p.id && p.github_full_name) // Filter out invalid entries
+          .map((p) => {
+            const repoName = p.github_full_name.split('/')[1] || p.github_full_name;
+            return {
+              id: p.id || `project-${Date.now()}-${Math.random()}`, // Fallback ID if missing
+              name: repoName,
+              icon: getProjectIcon(p.github_full_name),
+              stars: formatNumber(p.stars_count || 0),
+              forks: formatNumber(p.forks_count || 0),
+              contributors: p.contributors_count || 0,
+              openIssues: p.open_issues_count || 0,
+              prs: p.open_prs_count || 0,
+              description: `${p.language || 'Project'} repository${p.category ? ` - ${p.category}` : ''}`,
+              tags: Array.isArray(p.tags) ? p.tags : [],
+              color: getProjectColor(repoName),
+            };
+          });
 
         setProjects(mappedProjects);
       } catch (err) {

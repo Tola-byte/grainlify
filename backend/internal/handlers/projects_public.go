@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -8,8 +9,10 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/jagadeesh/grainlify/backend/internal/db"
+	"github.com/jagadeesh/grainlify/backend/internal/github"
 )
 
 type ProjectsPublicHandler struct {
@@ -18,6 +21,296 @@ type ProjectsPublicHandler struct {
 
 func NewProjectsPublicHandler(d *db.DB) *ProjectsPublicHandler {
 	return &ProjectsPublicHandler{db: d}
+}
+
+// Get returns a single verified project by id, enriched with GitHub repo metadata and language breakdown.
+func (h *ProjectsPublicHandler) Get() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if h.db == nil || h.db.Pool == nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "db_not_configured"})
+		}
+
+		projectID, err := uuid.Parse(c.Params("id"))
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid_project_id"})
+		}
+
+		// Load project from DB (verified + not deleted)
+		var id uuid.UUID
+		var fullName string
+		var language, category *string
+		var tagsJSON []byte
+		var starsCount, forksCount *int
+		var openIssuesCount, openPRsCount, contributorsCount int
+		var createdAt, updatedAt time.Time
+		var ecosystemName, ecosystemSlug *string
+
+		err = h.db.Pool.QueryRow(c.Context(), `
+SELECT 
+  p.id,
+  p.github_full_name,
+  p.language,
+  p.tags,
+  p.category,
+  p.stars_count,
+  p.forks_count,
+  (
+    SELECT COUNT(*)
+    FROM github_issues gi
+    WHERE gi.project_id = p.id AND gi.state = 'open'
+  ) AS open_issues_count,
+  (
+    SELECT COUNT(*)
+    FROM github_pull_requests gpr
+    WHERE gpr.project_id = p.id AND gpr.state = 'open'
+  ) AS open_prs_count,
+  (
+    SELECT COUNT(DISTINCT a.author_login)
+    FROM (
+      SELECT author_login FROM github_issues WHERE project_id = p.id AND author_login IS NOT NULL AND author_login != ''
+      UNION
+      SELECT author_login FROM github_pull_requests WHERE project_id = p.id AND author_login IS NOT NULL AND author_login != ''
+    ) a
+  ) AS contributors_count,
+  p.created_at,
+  p.updated_at,
+  e.name AS ecosystem_name,
+  e.slug AS ecosystem_slug
+FROM projects p
+LEFT JOIN ecosystems e ON p.ecosystem_id = e.id
+WHERE p.id = $1 AND p.status = 'verified' AND p.deleted_at IS NULL
+`, projectID).Scan(
+			&id, &fullName, &language, &tagsJSON, &category, &starsCount, &forksCount,
+			&openIssuesCount, &openPRsCount, &contributorsCount,
+			&createdAt, &updatedAt, &ecosystemName, &ecosystemSlug,
+		)
+		if err == pgx.ErrNoRows {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "project_not_found"})
+		}
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "project_lookup_failed"})
+		}
+
+		// Parse tags JSONB
+		var tags []string
+		if len(tagsJSON) > 0 {
+			_ = json.Unmarshal(tagsJSON, &tags)
+		}
+
+		// Default stars/forks to 0 if nil
+		stars := 0
+		if starsCount != nil {
+			stars = *starsCount
+		}
+		forks := 0
+		if forksCount != nil {
+			forks = *forksCount
+		}
+
+		// Enrich from GitHub (best effort, public/no-auth)
+		ctx, cancel := context.WithTimeout(c.Context(), 6*time.Second)
+		defer cancel()
+		gh := github.NewClient()
+
+		var repo github.Repo
+		repoOK := false
+		if r, err := gh.GetRepo(ctx, "", fullName); err == nil {
+			repo = r
+			repoOK = true
+			// Prefer live counts from GitHub if available
+			stars = repo.StargazersCount
+			forks = repo.ForksCount
+			// Best-effort persist
+			_, _ = h.db.Pool.Exec(c.Context(), `
+UPDATE projects SET stars_count=$2, forks_count=$3, updated_at=now()
+WHERE id=$1
+`, projectID, stars, forks)
+		}
+
+		// GitHub language breakdown (best effort)
+		var langsOut []fiber.Map
+		if m, err := gh.GetRepoLanguages(ctx, "", fullName); err == nil && len(m) > 0 {
+			var total int64
+			for _, v := range m {
+				total += v
+			}
+			if total > 0 {
+				for name, v := range m {
+					pct := float64(v) * 100.0 / float64(total)
+					langsOut = append(langsOut, fiber.Map{
+						"name":       name,
+						"percentage": pct,
+					})
+				}
+			}
+		}
+
+		resp := fiber.Map{
+			"id":                 id.String(),
+			"github_full_name":   fullName,
+			"language":           language,
+			"tags":               tags,
+			"category":           category,
+			"stars_count":        stars,
+			"forks_count":        forks,
+			"contributors_count": contributorsCount,
+			"open_issues_count":  openIssuesCount,
+			"open_prs_count":     openPRsCount,
+			"ecosystem_name":     ecosystemName,
+			"ecosystem_slug":     ecosystemSlug,
+			"created_at":         createdAt,
+			"updated_at":         updatedAt,
+			"languages":          langsOut,
+		}
+
+		if repoOK {
+			resp["repo"] = fiber.Map{
+				"full_name":         repo.FullName,
+				"html_url":          repo.HTMLURL,
+				"homepage":          repo.Homepage,
+				"description":       repo.Description,
+				"open_issues_count": repo.OpenIssuesCount,
+				"owner_login":       repo.Owner.Login,
+				"owner_avatar_url":  repo.Owner.AvatarURL,
+			}
+		}
+
+		return c.Status(fiber.StatusOK).JSON(resp)
+	}
+}
+
+// IssuesPublic returns recent issues for a verified project (read-only, no auth).
+func (h *ProjectsPublicHandler) IssuesPublic() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if h.db == nil || h.db.Pool == nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "db_not_configured"})
+		}
+		projectID, err := uuid.Parse(c.Params("id"))
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid_project_id"})
+		}
+
+		// Ensure project is verified and not deleted
+		var ok bool
+		if err := h.db.Pool.QueryRow(c.Context(), `
+SELECT EXISTS(
+  SELECT 1 FROM projects WHERE id=$1 AND status='verified' AND deleted_at IS NULL
+)
+`, projectID).Scan(&ok); err != nil || !ok {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "project_not_found"})
+		}
+
+		rows, err := h.db.Pool.Query(c.Context(), `
+SELECT github_issue_id, number, state, title, body, author_login, url, labels, updated_at_github, last_seen_at
+FROM github_issues
+WHERE project_id = $1
+ORDER BY COALESCE(updated_at_github, last_seen_at) DESC
+LIMIT 50
+`, projectID)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "issues_list_failed"})
+		}
+		defer rows.Close()
+
+		var out []fiber.Map
+		for rows.Next() {
+			var gid int64
+			var number int
+			var state, title, author, url string
+			var body *string
+			var labelsJSON []byte
+			var updated *time.Time
+			var lastSeen time.Time
+			if err := rows.Scan(&gid, &number, &state, &title, &body, &author, &url, &labelsJSON, &updated, &lastSeen); err != nil {
+				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "issues_list_failed"})
+			}
+
+			// labels JSONB (stored as array of objects) -> surface as-is
+			var labels []any
+			if len(labelsJSON) > 0 {
+				_ = json.Unmarshal(labelsJSON, &labels)
+			}
+
+			out = append(out, fiber.Map{
+				"github_issue_id": gid,
+				"number":          number,
+				"state":           state,
+				"title":           title,
+				"description":     body,
+				"author_login":    author,
+				"labels":          labels,
+				"url":             url,
+				"updated_at":      updated,
+				"last_seen_at":    lastSeen,
+			})
+		}
+
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{"issues": out})
+	}
+}
+
+// PRsPublic returns recent PRs for a verified project (read-only, no auth).
+func (h *ProjectsPublicHandler) PRsPublic() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if h.db == nil || h.db.Pool == nil {
+			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{"error": "db_not_configured"})
+		}
+		projectID, err := uuid.Parse(c.Params("id"))
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid_project_id"})
+		}
+
+		var ok bool
+		if err := h.db.Pool.QueryRow(c.Context(), `
+SELECT EXISTS(
+  SELECT 1 FROM projects WHERE id=$1 AND status='verified' AND deleted_at IS NULL
+)
+`, projectID).Scan(&ok); err != nil || !ok {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "project_not_found"})
+		}
+
+		rows, err := h.db.Pool.Query(c.Context(), `
+SELECT github_pr_id, number, state, title, author_login, url, merged, 
+       created_at_github, updated_at_github, closed_at_github, merged_at_github, last_seen_at
+FROM github_pull_requests
+WHERE project_id = $1
+ORDER BY COALESCE(updated_at_github, last_seen_at) DESC
+LIMIT 50
+`, projectID)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "prs_list_failed"})
+		}
+		defer rows.Close()
+
+		var out []fiber.Map
+		for rows.Next() {
+			var gid int64
+			var number int
+			var state, title, author, url string
+			var merged bool
+			var createdAt, updated, closedAt, mergedAt *time.Time
+			var lastSeen time.Time
+			if err := rows.Scan(&gid, &number, &state, &title, &author, &url, &merged, &createdAt, &updated, &closedAt, &mergedAt, &lastSeen); err != nil {
+				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "prs_list_failed"})
+			}
+			out = append(out, fiber.Map{
+				"github_pr_id": gid,
+				"number":       number,
+				"state":        state,
+				"title":        title,
+				"author_login": author,
+				"url":          url,
+				"merged":       merged,
+				"created_at":   createdAt,
+				"updated_at":   updated,
+				"closed_at":    closedAt,
+				"merged_at":    mergedAt,
+				"last_seen_at": lastSeen,
+			})
+		}
+
+		return c.Status(fiber.StatusOK).JSON(fiber.Map{"prs": out})
+	}
 }
 
 // List returns a filtered list of verified projects.
@@ -108,6 +401,24 @@ SELECT
   p.category,
   p.stars_count,
   p.forks_count,
+  (
+    SELECT COUNT(*)
+    FROM github_issues gi
+    WHERE gi.project_id = p.id AND gi.state = 'open'
+  ) AS open_issues_count,
+  (
+    SELECT COUNT(*)
+    FROM github_pull_requests gpr
+    WHERE gpr.project_id = p.id AND gpr.state = 'open'
+  ) AS open_prs_count,
+  (
+    SELECT COUNT(DISTINCT a.author_login)
+    FROM (
+      SELECT author_login FROM github_issues WHERE project_id = p.id AND author_login IS NOT NULL AND author_login != ''
+      UNION
+      SELECT author_login FROM github_pull_requests WHERE project_id = p.id AND author_login IS NOT NULL AND author_login != ''
+    ) a
+  ) AS contributors_count,
   p.created_at,
   p.updated_at,
   e.name AS ecosystem_name,
@@ -133,10 +444,11 @@ LIMIT $%d OFFSET $%d
 			var language, category *string
 			var tagsJSON []byte
 			var starsCount, forksCount *int
+			var openIssuesCount, openPRsCount, contributorsCount int
 			var createdAt, updatedAt time.Time
 			var ecosystemName, ecosystemSlug *string
 
-			if err := rows.Scan(&id, &fullName, &language, &tagsJSON, &category, &starsCount, &forksCount, &createdAt, &updatedAt, &ecosystemName, &ecosystemSlug); err != nil {
+			if err := rows.Scan(&id, &fullName, &language, &tagsJSON, &category, &starsCount, &forksCount, &openIssuesCount, &openPRsCount, &contributorsCount, &createdAt, &updatedAt, &ecosystemName, &ecosystemSlug); err != nil {
 				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "projects_list_failed", "details": err.Error()})
 			}
 
@@ -164,6 +476,9 @@ LIMIT $%d OFFSET $%d
 				"category":        category,
 				"stars_count":     stars,
 				"forks_count":     forks,
+				"contributors_count": contributorsCount,
+				"open_issues_count":  openIssuesCount,
+				"open_prs_count":     openPRsCount,
 				"ecosystem_name":  ecosystemName,
 				"ecosystem_slug":  ecosystemSlug,
 				"created_at":      createdAt,

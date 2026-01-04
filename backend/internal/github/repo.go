@@ -12,13 +12,17 @@ import (
 type Repo struct {
 	ID    int64 `json:"id"`
 	Owner struct {
-		ID    int64  `json:"id"`
-		Login string `json:"login"`
+		ID        int64  `json:"id"`
+		Login     string `json:"login"`
+		AvatarURL string `json:"avatar_url"`
 	} `json:"owner"`
 	FullName        string `json:"full_name"`
+	HTMLURL         string `json:"html_url"`
+	Homepage        string `json:"homepage"`
 	Private         bool   `json:"private"`
 	StargazersCount int    `json:"stargazers_count"`
 	ForksCount      int    `json:"forks_count"`
+	OpenIssuesCount int    `json:"open_issues_count"`
 	Description     string `json:"description"`
 	Permissions struct {
 		Admin bool `json:"admin"`
@@ -39,7 +43,9 @@ func (c *Client) GetRepo(ctx context.Context, accessToken string, fullName strin
 	if err != nil {
 		return Repo{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+accessToken)
+	if strings.TrimSpace(accessToken) != "" {
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	if c.UserAgent != "" {
 		req.Header.Set("User-Agent", c.UserAgent)
@@ -63,6 +69,45 @@ func (c *Client) GetRepo(ctx context.Context, accessToken string, fullName strin
 		return Repo{}, fmt.Errorf("invalid github repo response")
 	}
 	return r, nil
+}
+
+func (c *Client) GetRepoLanguages(ctx context.Context, accessToken string, fullName string) (map[string]int64, error) {
+	owner, repo, err := splitFullName(fullName)
+	if err != nil {
+		return nil, err
+	}
+	u := "https://api.github.com/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/languages"
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(accessToken) != "" {
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	if c.UserAgent != "" {
+		req.Header.Set("User-Agent", c.UserAgent)
+	}
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("github repo languages fetch failed: status %d", resp.StatusCode)
+	}
+
+	var langs map[string]int64
+	if err := json.NewDecoder(resp.Body).Decode(&langs); err != nil {
+		return nil, err
+	}
+	if langs == nil {
+		langs = map[string]int64{}
+	}
+	return langs, nil
 }
 
 func splitFullName(fullName string) (string, string, error) {

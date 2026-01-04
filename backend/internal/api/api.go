@@ -156,6 +156,9 @@ func New(cfg config.Config, deps Deps) *fiber.App {
 	projectsPublic := handlers.NewProjectsPublicHandler(deps.DB)
 	app.Get("/projects", projectsPublic.List())
 	app.Get("/projects/filters", projectsPublic.FilterOptions())
+	app.Get("/projects/:id", projectsPublic.Get())
+	app.Get("/projects/:id/issues/public", projectsPublic.IssuesPublic())
+	app.Get("/projects/:id/prs/public", projectsPublic.PRsPublic())
 
 	projects := handlers.NewProjectsHandler(cfg, deps.DB)
 	app.Post("/projects", auth.RequireAuth(cfg.JWTSecret), projects.Create())

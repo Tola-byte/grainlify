@@ -20,12 +20,3 @@ func Shutdown(ctx context.Context, app *fiber.App) error {
 		return err
 	}
 }
-
-
-
-
-
-
-
-
-

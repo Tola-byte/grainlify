@@ -177,6 +177,9 @@ export const getPublicProjects = (params?: {
       category: string | null;
       stars_count: number;
       forks_count: number;
+      contributors_count: number;
+      open_issues_count: number;
+      open_prs_count: number;
       ecosystem_name: string | null;
       ecosystem_slug: string | null;
       created_at: string;
@@ -187,6 +190,68 @@ export const getPublicProjects = (params?: {
     offset: number;
   }>(endpoint);
 };
+
+export const getPublicProject = (projectId: string) =>
+  apiRequest<{
+    id: string;
+    github_full_name: string;
+    language: string | null;
+    tags: string[];
+    category: string | null;
+    stars_count: number;
+    forks_count: number;
+    contributors_count: number;
+    open_issues_count: number;
+    open_prs_count: number;
+    ecosystem_name: string | null;
+    ecosystem_slug: string | null;
+    created_at: string;
+    updated_at: string;
+    languages: Array<{ name: string; percentage: number }>;
+    repo?: {
+      full_name: string;
+      html_url: string;
+      homepage: string;
+      description: string;
+      open_issues_count: number;
+      owner_login: string;
+      owner_avatar_url: string;
+    };
+  }>(`/projects/${projectId}`);
+
+export const getPublicProjectIssues = (projectId: string) =>
+  apiRequest<{
+    issues: Array<{
+      github_issue_id: number;
+      number: number;
+      state: string;
+      title: string;
+      description: string | null;
+      author_login: string;
+      labels: any[];
+      url: string;
+      updated_at: string | null;
+      last_seen_at: string;
+    }>;
+  }>(`/projects/${projectId}/issues/public`);
+
+export const getPublicProjectPRs = (projectId: string) =>
+  apiRequest<{
+    prs: Array<{
+      github_pr_id: number;
+      number: number;
+      state: string;
+      title: string;
+      author_login: string;
+      url: string;
+      merged: boolean;
+      created_at: string | null;
+      updated_at: string | null;
+      closed_at: string | null;
+      merged_at: string | null;
+      last_seen_at: string;
+    }>;
+  }>(`/projects/${projectId}/prs/public`);
 
 export const getProjectFilters = () =>
   apiRequest<{
