@@ -227,3 +227,4 @@ http://localhost:8080/auth/github/login/callback  # ❌ WRONG
 **Key Rule:** If GitHub needs to reach it → use tunnel/production URL. If it's just for internal redirects → use localhost (local) or production frontend.
 
 
+
