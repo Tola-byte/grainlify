@@ -38,50 +38,31 @@ func Up(ctx context.Context, pool *pgxpool.Pool) error {
 	sqlDB := stdlib.OpenDB(*pool.Config().ConnConfig)
 	defer sqlDB.Close()
 
-	// Add random jitter (0-5 seconds) to avoid thundering herd problem
+	// Add random jitter (0-2 seconds) to avoid thundering herd problem
 	// This helps when multiple instances start simultaneously
-	jitter := time.Duration(rand.Intn(5000)) * time.Millisecond
+	jitter := time.Duration(rand.Intn(2000)) * time.Millisecond
 	if jitter > 0 {
 		slog.Info("adding random jitter before migration", "jitter_ms", jitter.Milliseconds())
 		time.Sleep(jitter)
 	}
 
-	// Set lock_timeout BEFORE creating the postgres driver
-	// The driver uses pg_advisory_lock which needs the timeout set on the connection first
-	// Increase timeout to 120s to handle concurrent deployments better
-	slog.Info("setting lock timeout for migration connection", "timeout", "120s")
-	_, err = sqlDB.ExecContext(ctx, "SET lock_timeout = '120s'")
-	if err != nil {
-		slog.Warn("failed to set lock_timeout, continuing anyway",
-			"error", err,
-		)
-	}
-
-	// Retry driver creation with exponential backoff
+	// Retry driver creation with simple fixed delay
 	// The driver creation itself can fail if another instance is holding the lock
-	maxDriverRetries := 3
+	maxDriverRetries := 10
 	var db database.Driver
 	for driverAttempt := 1; driverAttempt <= maxDriverRetries; driverAttempt++ {
 		if driverAttempt > 1 {
-			waitTime := time.Duration(1<<uint(driverAttempt-2)) * 2 * time.Second
+			// Simple fixed delay: 500ms between attempts
+			// No exponential backoff, no timeouts
 			slog.Info("retrying postgres driver creation",
 				"attempt", driverAttempt,
 				"max_retries", maxDriverRetries,
-				"wait_time", waitTime,
 			)
-			time.Sleep(waitTime)
-			
-			// Reset lock_timeout for retry attempts
-			_, err := sqlDB.ExecContext(ctx, "SET lock_timeout = '120s'")
-			if err != nil {
-				slog.Warn("failed to reset lock_timeout on driver retry",
-					"error", err,
-				)
-			}
+			time.Sleep(500 * time.Millisecond)
 		}
 
 		slog.Info("creating postgres migration driver", "attempt", driverAttempt)
-		// Configure postgres driver with lock timeout to handle concurrent migrations
+		// Configure postgres driver - no lock_timeout set, let PostgreSQL handle it
 		db, err = postgres.WithInstance(sqlDB, &postgres.Config{
 			MigrationsTable:       "schema_migrations",
 			DatabaseName:          "",
@@ -93,16 +74,15 @@ func Up(ctx context.Context, pool *pgxpool.Pool) error {
 			break
 		}
 
-		// Check if it's a lock timeout error
+		// Check if it's a lock error (timeout or can't acquire)
 		errStr := err.Error()
 		isLockError := contains(errStr, "timeout") ||
 			contains(errStr, "lock") ||
 			contains(errStr, "can't acquire") ||
-			contains(errStr, "55P03") ||
-			contains(errStr, "lock timeout")
+			contains(errStr, "55P03")
 
 		if driverAttempt < maxDriverRetries && isLockError {
-			slog.Warn("postgres driver creation failed due to lock timeout, will retry",
+			slog.Info("postgres driver creation failed due to lock, will retry",
 				"attempt", driverAttempt,
 				"error", err,
 			)
@@ -150,28 +130,19 @@ func Up(ctx context.Context, pool *pgxpool.Pool) error {
 
 	slog.Info("running database migrations")
 	
-	// Try to run migrations with retry logic for lock timeouts
-	// This handles cases where multiple instances start simultaneously in deployments
-	maxRetries := 5
+	// Try to run migrations with simple retry logic
+	// Use fixed short delays instead of exponential backoff
+	maxRetries := 20
 	var lastErr error
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		if attempt > 1 {
-			// Exponential backoff: 2s, 4s, 8s, 16s
-			waitTime := time.Duration(1<<uint(attempt-2)) * 2 * time.Second
-			slog.Info("retrying migration after lock timeout",
+			// Simple fixed delay: 500ms between attempts
+			// No exponential backoff, no timeouts
+			slog.Info("retrying migration after lock error",
 				"attempt", attempt,
 				"max_retries", maxRetries,
-				"wait_time", waitTime,
 			)
-			time.Sleep(waitTime)
-			
-			// Reset lock_timeout for retry attempts
-			_, err := sqlDB.ExecContext(ctx, "SET lock_timeout = '120s'")
-			if err != nil {
-				slog.Warn("failed to reset lock_timeout on retry",
-					"error", err,
-				)
-			}
+			time.Sleep(500 * time.Millisecond)
 		}
 		
 		err := m.Up()
@@ -180,16 +151,15 @@ func Up(ctx context.Context, pool *pgxpool.Pool) error {
 			break
 		}
 		
-		// Check if it's a lock timeout error (SQLSTATE 55P03)
+		// Check if it's a lock error (timeout or can't acquire)
 		errStr := err.Error()
 		isLockError := contains(errStr, "timeout") || 
 			contains(errStr, "lock") || 
 			contains(errStr, "can't acquire") ||
-			contains(errStr, "55P03") ||
-			contains(errStr, "lock timeout")
+			contains(errStr, "55P03")
 		
 		if attempt < maxRetries && isLockError {
-			slog.Warn("migration lock timeout, will retry",
+			slog.Info("migration lock error, will retry",
 				"attempt", attempt,
 				"max_retries", maxRetries,
 				"error", err,

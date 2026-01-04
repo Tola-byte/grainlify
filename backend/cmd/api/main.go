@@ -81,11 +81,9 @@ func main() {
 		}()
 
 		if cfg.AutoMigrate {
-			slog.Info("running database migrations", "step", "5", "action", "running_database_migrations", "timeout", "120s")
-			// Increased timeout to 120s to allow for retries and lock acquisition
-			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-			err := migrate.Up(ctx, database.Pool)
-			cancel()
+			slog.Info("running database migrations", "step", "5", "action", "running_database_migrations")
+			// Use background context - migrations handle their own retries without timeouts
+			err := migrate.Up(context.Background(), database.Pool)
 			if err != nil {
 				slog.Error("migration failed", "step", "5", "action", "migration_failed",
 					"error", err,
