@@ -216,15 +216,50 @@ WHERE login = $1
 			rankTierColor = GetRankTierColor(rankTier)
 		}
 
+		// Count distinct projects user has contributed to (via issues or PRs)
+		var projectsContributedToCount int
+		err = h.db.Pool.QueryRow(c.Context(), `
+SELECT COUNT(DISTINCT project_id)
+FROM (
+  SELECT project_id FROM github_issues WHERE author_login = $1
+  UNION
+  SELECT project_id FROM github_pull_requests WHERE author_login = $1
+) contributions
+INNER JOIN projects p ON contributions.project_id = p.id
+WHERE p.status = 'verified'
+`, *githubLogin).Scan(&projectsContributedToCount)
+		if err != nil {
+			slog.Warn("failed to count projects contributed to", "error", err, "user_id", userID, "github_login", *githubLogin)
+			projectsContributedToCount = 0
+		}
+
+		// Count projects where user is a maintainer/lead
+		// This checks if the user is the owner of the project (via github_full_name owner match)
+		var projectsLedCount int
+		err = h.db.Pool.QueryRow(c.Context(), `
+SELECT COUNT(DISTINCT p.id)
+FROM projects p
+WHERE p.status = 'verified' 
+  AND p.deleted_at IS NULL
+  AND SPLIT_PART(p.github_full_name, '/', 1) = $1
+`, *githubLogin).Scan(&projectsLedCount)
+		if err != nil {
+			slog.Warn("failed to count projects led", "error", err, "user_id", userID, "github_login", *githubLogin)
+			projectsLedCount = 0
+		}
+
 		response := fiber.Map{
-			"contributions_count": contributionsCount,
-			"languages":           languages,
-			"ecosystems":          ecosystems,
+			"contributions_count":         contributionsCount,
+			"projects_contributed_to_count": projectsContributedToCount,
+			"projects_led_count":          projectsLedCount,
+			"rewards_count":              0, // TODO: Implement rewards system
+			"languages":                  languages,
+			"ecosystems":                 ecosystems,
 			"rank": fiber.Map{
-				"position":     rankPosition,
-				"tier":         string(rankTier),
-				"tier_name":    rankTierName,
-				"tier_color":   rankTierColor,
+				"position":   rankPosition,
+				"tier":       string(rankTier),
+				"tier_name":  rankTierName,
+				"tier_color": rankTierColor,
 			},
 		}
 
