@@ -76,6 +76,11 @@ export function ProfileTab() {
     location?: string;
     website?: string;
     bio?: string;
+    telegram?: string;
+    linkedin?: string;
+    whatsapp?: string;
+    twitter?: string;
+    discord?: string;
   }>({});
 
   /* -------------------- Validation helpers -------------------- */
@@ -113,15 +118,6 @@ export function ProfileTab() {
 
   const validateBio = (value: string) =>
     value.length > MAX_BIO_LENGTH ? "Bio cannot exceed 500 characters" : "";
-
-  // Validation state
-  const [errors, setErrors] = useState<{
-    telegram?: string;
-    linkedin?: string;
-    whatsapp?: string;
-    twitter?: string;
-    discord?: string;
-  }>({});
 
   const validateHandle = (platform: string, value: string): string | undefined => {
     if (!value) return undefined;
