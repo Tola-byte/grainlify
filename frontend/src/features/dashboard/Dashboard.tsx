@@ -469,7 +469,7 @@ export function Dashboard() {
                   />
                 )}
                 {currentPage === 'contributors' && <ContributorsPage />}
-                {currentPage === 'maintainers' && <MaintainersPage onNavigate={handleNavigation} />}
+                {currentPage === 'maintainers' && <MaintainersPage />}
                 {currentPage === 'profile' && (
                   <ProfilePage
                     viewingUserId={viewingUserId}
