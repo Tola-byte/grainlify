@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env, token};
+use soroban_sdk::{testutils::{Address as _, Ledger}, vec, Address, Env, token, Vec};
 
 fn create_token_contract<'a>(e: &Env, admin: &Address) -> (token::Client<'a>, token::StellarAssetClient<'a>) {
     let contract_address = e.register_stellar_asset_contract(admin.clone());
@@ -222,4 +222,319 @@ fn test_get_balance() {
 
     // Balance should be updated
     assert_eq!(setup.escrow.get_balance(), amount);
+}
+
+// ============================================================================
+// BATCH OPERATIONS TESTS
+// ============================================================================
+
+#[test]
+fn test_batch_lock_funds_success() {
+    let setup = TestSetup::new();
+    let deadline = setup.env.ledger().timestamp() + 1000;
+
+    // Create batch items
+    let items = vec![
+        &setup.env,
+        LockFundsItem {
+            bounty_id: 1,
+            depositor: setup.depositor.clone(),
+            amount: 1000,
+            deadline,
+        },
+        LockFundsItem {
+            bounty_id: 2,
+            depositor: setup.depositor.clone(),
+            amount: 2000,
+            deadline,
+        },
+        LockFundsItem {
+            bounty_id: 3,
+            depositor: setup.depositor.clone(),
+            amount: 3000,
+            deadline,
+        },
+    ];
+
+    // Mint enough tokens
+    setup.token_admin.mint(&setup.depositor, &10_000);
+
+    // Batch lock funds
+    let count = setup.escrow.batch_lock_funds(&items);
+    assert_eq!(count, 3);
+
+    // Verify all bounties are locked
+    for i in 1..=3 {
+        let escrow = setup.escrow.get_escrow_info(&i);
+        assert_eq!(escrow.status, EscrowStatus::Locked);
+    }
+
+    // Verify contract balance
+    assert_eq!(setup.escrow.get_balance(), 6000);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #8)")] // InvalidBatchSize
+fn test_batch_lock_funds_empty() {
+    let setup = TestSetup::new();
+    let items: Vec<LockFundsItem> = vec![&setup.env];
+    setup.escrow.batch_lock_funds(&items);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")] // BountyExists
+fn test_batch_lock_funds_duplicate_bounty_id() {
+    let setup = TestSetup::new();
+    let deadline = setup.env.ledger().timestamp() + 1000;
+
+    // Lock a bounty first
+    setup.escrow.lock_funds(&setup.depositor, &1, &1000, &deadline);
+
+    // Try to batch lock with duplicate bounty_id
+    let items = vec![
+        &setup.env,
+        LockFundsItem {
+            bounty_id: 1, // Already exists
+            depositor: setup.depositor.clone(),
+            amount: 2000,
+            deadline,
+        },
+        LockFundsItem {
+            bounty_id: 2,
+            depositor: setup.depositor.clone(),
+            amount: 3000,
+            deadline,
+        },
+    ];
+
+    setup.escrow.batch_lock_funds(&items);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")] // DuplicateBountyId
+fn test_batch_lock_funds_duplicate_in_batch() {
+    let setup = TestSetup::new();
+    let deadline = setup.env.ledger().timestamp() + 1000;
+
+    let items = vec![
+        &setup.env,
+        LockFundsItem {
+            bounty_id: 1,
+            depositor: setup.depositor.clone(),
+            amount: 1000,
+            deadline,
+        },
+        LockFundsItem {
+            bounty_id: 1, // Duplicate in same batch
+            depositor: setup.depositor.clone(),
+            amount: 2000,
+            deadline,
+        },
+    ];
+
+    setup.escrow.batch_lock_funds(&items);
+}
+
+#[test]
+fn test_batch_release_funds_success() {
+    let setup = TestSetup::new();
+    let deadline = setup.env.ledger().timestamp() + 1000;
+
+    // Lock multiple bounties
+    setup.escrow.lock_funds(&setup.depositor, &1, &1000, &deadline);
+    setup.escrow.lock_funds(&setup.depositor, &2, &2000, &deadline);
+    setup.escrow.lock_funds(&setup.depositor, &3, &3000, &deadline);
+
+    // Create contributors
+    let contributor1 = Address::generate(&setup.env);
+    let contributor2 = Address::generate(&setup.env);
+    let contributor3 = Address::generate(&setup.env);
+
+    // Create batch release items
+    let items = vec![
+        &setup.env,
+        ReleaseFundsItem {
+            bounty_id: 1,
+            contributor: contributor1.clone(),
+        },
+        ReleaseFundsItem {
+            bounty_id: 2,
+            contributor: contributor2.clone(),
+        },
+        ReleaseFundsItem {
+            bounty_id: 3,
+            contributor: contributor3.clone(),
+        },
+    ];
+
+    // Batch release funds
+    let count = setup.escrow.batch_release_funds(&items);
+    assert_eq!(count, 3);
+
+    // Verify all bounties are released
+    for i in 1..=3 {
+        let escrow = setup.escrow.get_escrow_info(&i);
+        assert_eq!(escrow.status, EscrowStatus::Released);
+    }
+
+    // Verify balances
+    assert_eq!(setup.token.balance(&contributor1), 1000);
+    assert_eq!(setup.token.balance(&contributor2), 2000);
+    assert_eq!(setup.token.balance(&contributor3), 3000);
+    assert_eq!(setup.escrow.get_balance(), 0);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #8)")] // InvalidBatchSize
+fn test_batch_release_funds_empty() {
+    let setup = TestSetup::new();
+    let items: Vec<ReleaseFundsItem> = vec![&setup.env];
+    setup.escrow.batch_release_funds(&items);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")] // BountyNotFound
+fn test_batch_release_funds_not_found() {
+    let setup = TestSetup::new();
+    let contributor = Address::generate(&setup.env);
+
+    let items = vec![
+        &setup.env,
+        ReleaseFundsItem {
+            bounty_id: 999, // Doesn't exist
+            contributor: contributor.clone(),
+        },
+    ];
+
+    setup.escrow.batch_release_funds(&items);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #5)")] // FundsNotLocked
+fn test_batch_release_funds_already_released() {
+    let setup = TestSetup::new();
+    let deadline = setup.env.ledger().timestamp() + 1000;
+
+    // Lock and release one bounty
+    setup.escrow.lock_funds(&setup.depositor, &1, &1000, &deadline);
+    setup.escrow.release_funds(&1, &setup.contributor);
+
+    // Lock another bounty
+    setup.escrow.lock_funds(&setup.depositor, &2, &2000, &deadline);
+
+    let contributor2 = Address::generate(&setup.env);
+
+    // Try to batch release including already released bounty
+    let items = vec![
+        &setup.env,
+        ReleaseFundsItem {
+            bounty_id: 1, // Already released
+            contributor: setup.contributor.clone(),
+        },
+        ReleaseFundsItem {
+            bounty_id: 2,
+            contributor: contributor2.clone(),
+        },
+    ];
+
+    setup.escrow.batch_release_funds(&items);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")] // DuplicateBountyId
+fn test_batch_release_funds_duplicate_in_batch() {
+    let setup = TestSetup::new();
+    let deadline = setup.env.ledger().timestamp() + 1000;
+
+    setup.escrow.lock_funds(&setup.depositor, &1, &1000, &deadline);
+
+    let contributor = Address::generate(&setup.env);
+
+    let items = vec![
+        &setup.env,
+        ReleaseFundsItem {
+            bounty_id: 1,
+            contributor: contributor.clone(),
+        },
+        ReleaseFundsItem {
+            bounty_id: 1, // Duplicate in same batch
+            contributor: contributor.clone(),
+        },
+    ];
+
+    setup.escrow.batch_release_funds(&items);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #3)")] // BountyExists
+fn test_batch_operations_atomicity() {
+    let setup = TestSetup::new();
+    let deadline = setup.env.ledger().timestamp() + 1000;
+
+    // Lock one bounty successfully
+    setup.escrow.lock_funds(&setup.depositor, &1, &1000, &deadline);
+
+    // Try to batch lock with one valid and one that would fail (duplicate)
+    // This should fail entirely due to atomicity
+    let items = vec![
+        &setup.env,
+        LockFundsItem {
+            bounty_id: 2, // Valid
+            depositor: setup.depositor.clone(),
+            amount: 2000,
+            deadline,
+        },
+        LockFundsItem {
+            bounty_id: 1, // Already exists - should cause entire batch to fail
+            depositor: setup.depositor.clone(),
+            amount: 3000,
+            deadline,
+        },
+    ];
+
+    // This should panic and no bounties should be locked
+    setup.escrow.batch_lock_funds(&items);
+}
+
+#[test]
+fn test_batch_operations_large_batch() {
+    let setup = TestSetup::new();
+    let deadline = setup.env.ledger().timestamp() + 1000;
+
+    // Create a batch of 10 bounties
+    let mut items = Vec::new(&setup.env);
+    for i in 1..=10 {
+        items.push_back(LockFundsItem {
+            bounty_id: i,
+            depositor: setup.depositor.clone(),
+            amount: (i * 100) as i128,
+            deadline,
+        });
+    }
+
+    // Mint enough tokens
+    setup.token_admin.mint(&setup.depositor, &10_000);
+
+    // Batch lock
+    let count = setup.escrow.batch_lock_funds(&items);
+    assert_eq!(count, 10);
+
+    // Verify all are locked
+    for i in 1..=10 {
+        let escrow = setup.escrow.get_escrow_info(&i);
+        assert_eq!(escrow.status, EscrowStatus::Locked);
+    }
+
+    // Create batch release items
+    let mut release_items = Vec::new(&setup.env);
+    for i in 1..=10 {
+        release_items.push_back(ReleaseFundsItem {
+            bounty_id: i,
+            contributor: Address::generate(&setup.env),
+        });
+    }
+
+    // Batch release
+    let release_count = setup.escrow.batch_release_funds(&release_items);
+    assert_eq!(release_count, 10);
 }
