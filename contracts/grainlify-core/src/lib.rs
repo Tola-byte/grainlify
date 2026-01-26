@@ -158,11 +158,8 @@
 
 mod multisig;
 use multisig::MultiSig;
-use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env};
-use soroban_sdk::Vec;
-=======
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol,
+    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Symbol, Vec,
 };
 
 // ==================== MONITORING MODULE ====================
@@ -476,12 +473,28 @@ const VERSION: u32 = 1;
     /// ```
  
 #[contractimpl]
-impl GrainlifyContract {   
-pub fn init(env: Env, signers: Vec<Address>, threshold: u32) {
-    if env.storage().instance().has(&DataKey::Version) {
-        panic!("Already initialized");
+impl GrainlifyContract {
+    /// Initializes the contract with multisig configuration.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `signers` - List of signer addresses for multisig
+    /// * `threshold` - Number of signatures required to execute proposals
+    pub fn init(env: Env, signers: Vec<Address>, threshold: u32) {
+        if env.storage().instance().has(&DataKey::Version) {
+            panic!("Already initialized");
+        }
 
-    pub fn init(env: Env, admin: Address) {
+        MultiSig::init(&env, signers, threshold);
+        env.storage().instance().set(&DataKey::Version, &VERSION);
+    }
+
+    /// Initializes the contract with a single admin address.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `admin` - Address authorized to perform upgrades
+    pub fn init_admin(env: Env, admin: Address) {
         let start = env.ledger().timestamp();
 
         // Prevent re-initialization to protect admin immutability
@@ -502,39 +515,47 @@ pub fn init(env: Env, signers: Vec<Address>, threshold: u32) {
         // Track performance
         let duration = env.ledger().timestamp().saturating_sub(start);
         monitoring::emit_performance(&env, symbol_short!("init"), duration);
-
     }
 
-    MultiSig::init(&env, signers, threshold);
-    env.storage().instance().set(&DataKey::Version, &VERSION);
-}
 
 
 
+    /// Proposes an upgrade with a new WASM hash (multisig version).
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `proposer` - Address proposing the upgrade
+    /// * `wasm_hash` - Hash of the new WASM code
+    ///
+    /// # Returns
+    /// * `u64` - The proposal ID
+    pub fn propose_upgrade(
+        env: Env,
+        proposer: Address,
+        wasm_hash: BytesN<32>,
+    ) -> u64 {
+        let proposal_id = MultiSig::propose(&env, proposer);
 
-pub fn propose_upgrade(
-    env: Env,
-    proposer: Address,
-    wasm_hash: BytesN<32>,
-) -> u64 {
-    let proposal_id = MultiSig::propose(&env, proposer);
+        env.storage()
+            .instance()
+            .set(&DataKey::UpgradeProposal(proposal_id), &wasm_hash);
 
-    env.storage()
-        .instance()
-        .set(&DataKey::UpgradeProposal(proposal_id), &wasm_hash);
+        proposal_id
+    }
 
-    proposal_id
-}
-
-
-pub fn approve_upgrade(
-    env: Env,
-    proposal_id: u64,
-    signer: Address,
-) {
-    MultiSig::approve(&env, proposal_id, signer);
-}
-}
+    /// Approves an upgrade proposal (multisig version).
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `proposal_id` - The ID of the proposal to approve
+    /// * `signer` - Address approving the proposal
+    pub fn approve_upgrade(
+        env: Env,
+        proposal_id: u64,
+        signer: Address,
+    ) {
+        MultiSig::approve(&env, proposal_id, signer);
+    }
 
 
     /// Upgrades the contract to new WASM code.
@@ -629,21 +650,32 @@ pub fn approve_upgrade(
     /// * If admin address is not set (contract not initialized)
     /// * If caller is not the admin
 
-pub fn execute_upgrade(env: Env, proposal_id: u64) {
-    if !MultiSig::can_execute(&env, proposal_id) {
-        panic!("Threshold not met");
+    /// Executes an upgrade proposal that has met the multisig threshold.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `proposal_id` - The ID of the upgrade proposal to execute
+    pub fn execute_upgrade(env: Env, proposal_id: u64) {
+        if !MultiSig::can_execute(&env, proposal_id) {
+            panic!("Threshold not met");
+        }
+
+        let wasm_hash: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::UpgradeProposal(proposal_id))
+            .expect("Missing upgrade proposal");
+
+        env.deployer().update_current_contract_wasm(wasm_hash);
+
+        MultiSig::mark_executed(&env, proposal_id);
     }
 
-    let wasm_hash: BytesN<32> = env
-        .storage()
-        .instance()
-        .get(&DataKey::UpgradeProposal(proposal_id))
-        .expect("Missing upgrade proposal");
-
-    env.deployer().update_current_contract_wasm(wasm_hash);
-
-    MultiSig::mark_executed(&env, proposal_id);
-  
+    /// Upgrades the contract to new WASM code (single admin version).
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `new_wasm_hash` - Hash of the uploaded WASM code (32 bytes)
     pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
         let start = env.ledger().timestamp();
 
@@ -660,7 +692,6 @@ pub fn execute_upgrade(env: Env, proposal_id: u64) {
         // Track performance
         let duration = env.ledger().timestamp().saturating_sub(start);
         monitoring::emit_performance(&env, symbol_short!("upgrade"), duration);
-
     }
 
 
@@ -842,9 +873,6 @@ mod test {
 
         client.init(&signers, &2u32);
     }
-}
-
-
 
     #[test]
     fn test_set_version() {
@@ -855,7 +883,7 @@ mod test {
         let client = GrainlifyContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        client.init(&admin);
+        client.init_admin(&admin);
 
         client.set_version(&2);
         assert_eq!(client.get_version(), 2);
