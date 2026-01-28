@@ -293,4 +293,143 @@ impl GovernanceContract {
         
         Ok(())
     }
+
+    /// Finalize a proposal (check votes and update status)
+    pub fn finalize_proposal(
+        env: soroban_sdk::Env,
+        proposal_id: u32,
+    ) -> Result<ProposalStatus, Error> {
+        // Load proposal
+        let mut proposals: soroban_sdk::Map<u32, Proposal> = env
+            .storage()
+            .instance()
+            .get(&PROPOSALS)
+            .ok_or(Error::ProposalsNotFound)?;
+        
+        let mut proposal = proposals
+            .get(proposal_id)
+            .ok_or(Error::ProposalNotFound)?;
+        
+        // Check proposal is active
+        if proposal.status != ProposalStatus::Active {
+            return Err(Error::ProposalNotActive);
+        }
+        
+        let current_time = env.ledger().timestamp();
+        
+        // Check voting period ended
+        if current_time <= proposal.voting_end {
+            return Err(Error::VotingStillActive);
+        }
+        
+        // Load config
+        let config: GovernanceConfig = env
+            .storage()
+            .instance()
+            .get(&GOVERNANCE_CONFIG)
+            .ok_or(Error::NotInitialized)?;
+        
+        // Calculate total possible votes (placeholder for now)
+        let total_possible_votes = 1000i128; 
+        
+        let total_cast_votes = proposal.votes_for + proposal.votes_against + proposal.votes_abstain;
+        
+        // Check quorum
+        let quorum_met = (total_cast_votes * 10000) / total_possible_votes >= config.quorum_percentage as i128;
+        
+        if !quorum_met {
+            proposal.status = ProposalStatus::Rejected;
+            proposals.set(proposal_id, proposal.clone());
+            env.storage().instance().set(&PROPOSALS, &proposals);
+            return Ok(ProposalStatus::Rejected);
+        }
+        
+        // Check approval threshold (excluding abstentions)
+        let votes_cast_for_or_against = proposal.votes_for + proposal.votes_against;
+        
+        if votes_cast_for_or_against == 0 {
+            proposal.status = ProposalStatus::Rejected;
+            proposals.set(proposal_id, proposal.clone());
+            env.storage().instance().set(&PROPOSALS, &proposals);
+            return Ok(ProposalStatus::Rejected);
+        }
+        
+        let approval_percentage = (proposal.votes_for * 10000) / votes_cast_for_or_against;
+        
+        if approval_percentage >= config.approval_threshold as i128 {
+            proposal.status = ProposalStatus::Approved;
+        } else {
+            proposal.status = ProposalStatus::Rejected;
+        }
+        
+        proposals.set(proposal_id, proposal.clone());
+        env.storage().instance().set(&PROPOSALS, &proposals);
+        
+        // Emit event
+        env.events().publish(
+            (symbol_short!("finalize"), proposal_id),
+            proposal.status.clone(),
+        );
+        
+        Ok(proposal.status)
+    }
+    
+    /// Execute an approved proposal
+    pub fn execute_proposal(
+        env: soroban_sdk::Env,
+        executor: Address,
+        proposal_id: u32,
+    ) -> Result<(), Error> {
+        // Authenticate executor (anyone can execute after approval)
+        executor.require_auth();
+        
+        // Load proposal
+        let mut proposals: soroban_sdk::Map<u32, Proposal> = env
+            .storage()
+            .instance()
+            .get(&PROPOSALS)
+            .ok_or(Error::ProposalsNotFound)?;
+        
+        let mut proposal = proposals
+            .get(proposal_id)
+            .ok_or(Error::ProposalNotFound)?;
+        
+        // Check proposal is approved
+        if proposal.status != ProposalStatus::Approved {
+            return Err(Error::ProposalNotApproved);
+        }
+        
+        let current_time = env.ledger().timestamp();
+        
+        // Check execution delay has passed
+        let earliest_execution = proposal.voting_end + proposal.execution_delay;
+        if current_time < earliest_execution {
+            return Err(Error::ExecutionDelayNotMet);
+        }
+        
+        // Check not expired
+        let expiration = earliest_execution + (7 * 24 * 60 * 60); // 7 days after execution window
+        if current_time > expiration {
+            proposal.status = ProposalStatus::Expired;
+            proposals.set(proposal_id, proposal);
+            env.storage().instance().set(&PROPOSALS, &proposals);
+            return Err(Error::ProposalExpired);
+        }
+        
+        // Execute the upgrade
+        env.deployer().update_current_contract_wasm(proposal.new_wasm_hash);
+        
+        // Mark as executed
+        proposal.status = ProposalStatus::Executed;
+        proposals.set(proposal_id, proposal.clone());
+        env.storage().instance().set(&PROPOSALS, &proposals);
+        
+        // Emit event
+        env.events().publish(
+            (symbol_short!("execute"), executor.clone()),
+            proposal_id,
+        );
+        
+        Ok(())
+    }
 }
