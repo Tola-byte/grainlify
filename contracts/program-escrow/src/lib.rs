@@ -686,6 +686,40 @@ pub enum DataKey {
     IsPaused,                     // Global contract pause state
 }
 
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProgramFilter {
+    pub authorized_key: Option<Address>,
+    pub token_address: Option<Address>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayoutFilter {
+    pub recipient: Option<Address>,
+    pub min_amount: Option<i128>,
+    pub max_amount: Option<i128>,
+    pub start_time: Option<u64>,
+    pub end_time: Option<u64>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Pagination {
+    pub start_index: u64,
+    pub limit: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProgramStats {
+    pub total_programs: u64,
+    pub total_funds_locked: i128,
+    pub total_funds_remaining: i128,
+    pub total_payouts_volume: i128,
+}
+
+
 // ============================================================================
 // Contract Implementation
 // ============================================================================
@@ -2100,6 +2134,178 @@ impl ProgramEscrowContract {
     }
 
     // ========================================================================
+    // Query Functions
+    // ========================================================================
+
+    /// Query programs with filtering and pagination.
+    ///
+    /// # Performance
+    /// This function iterates through the registry. For large registries, ensure `pagination.limit` is reasonable
+    /// to avoid running out of gas. 
+    pub fn get_programs(
+        env: Env, 
+        filter: ProgramFilter, 
+        pagination: Pagination
+    ) -> Vec<ProgramData> {
+        let registry: Vec<String> = env
+            .storage()
+            .instance()
+            .get(&PROGRAM_REGISTRY)
+            .unwrap_or(vec![&env]);
+            
+        let mut result = vec![&env];
+        let mut count: u32 = 0;
+        let mut skipped: u64 = 0;
+        
+        for i in 0..registry.len() {
+            // Check pagination limit
+            if count >= pagination.limit {
+                break;
+            }
+            
+            let program_id = registry.get(i).unwrap();
+            let key = DataKey::Program(program_id);
+            
+            if !env.storage().instance().has(&key) {
+                continue;
+            }
+            
+            let program: ProgramData = env
+                .storage()
+                .instance()
+                .get(&key)
+                .unwrap();
+                
+            // Apply Filters
+            if let Some(key) = &filter.authorized_key {
+                if &program.authorized_payout_key != key {
+                    continue;
+                }
+            }
+            
+            if let Some(token) = &filter.token_address {
+                 if &program.token_address != token {
+                    continue;
+                }
+            }
+            
+            // Apply Pagination Skip
+            if skipped < pagination.start_index {
+                skipped += 1;
+                continue;
+            }
+            
+            result.push_back(program);
+            count += 1;
+        }
+        
+        result
+    }
+    
+    /// Query payouts for a program with filtering
+    pub fn get_payouts(
+        env: Env, 
+        program_id: String,
+        filter: PayoutFilter
+    ) -> Vec<PayoutRecord> {
+        let program_key = DataKey::Program(program_id);
+        if !env.storage().instance().has(&program_key) {
+             return vec![&env];
+        }
+        
+        let program: ProgramData = env
+            .storage()
+            .instance()
+            .get(&program_key)
+            .unwrap();
+            
+        let mut result = vec![&env];
+        
+        for record in program.payout_history.iter() {
+            // Recipient filter
+            if let Some(recipient) = &filter.recipient {
+                if &record.recipient != recipient {
+                    continue;
+                }
+            }
+            
+            // Amount filter
+            if let Some(min) = filter.min_amount {
+                if record.amount < min {
+                    continue;
+                }
+            }
+            if let Some(max) = filter.max_amount {
+                if record.amount > max {
+                    continue;
+                }
+            }
+            
+            // Time filter
+            if let Some(start) = filter.start_time {
+                if record.timestamp < start {
+                    continue;
+                }
+            }
+            if let Some(end) = filter.end_time {
+                if record.timestamp > end {
+                    continue;
+                }
+            }
+            
+            result.push_back(record);
+        }
+        
+        result
+    }
+
+        
+        result
+    }
+
+    /// Get aggregate statistics for all programs.
+    ///
+    /// # Performance
+    /// This function iterates through ALL programs. It may exceed gas limits if the registry is very large.
+    /// Primarily intended for off-chain monitoring or smaller deployments.
+    pub fn get_stats(env: Env) -> ProgramStats {
+        let registry: Vec<String> = env
+            .storage()
+            .instance()
+            .get(&PROGRAM_REGISTRY)
+            .unwrap_or(vec![&env]);
+            
+        let mut total_locked: i128 = 0;
+        let mut total_remaining: i128 = 0;
+        let mut total_payouts: i128 = 0;
+        
+        for i in 0..registry.len() {
+            let program_id = registry.get(i).unwrap();
+            let key = DataKey::Program(program_id);
+            
+            if env.storage().instance().has(&key) {
+                let program: ProgramData = env
+                    .storage()
+                    .instance()
+                    .get(&key)
+                    .unwrap();
+                
+                total_locked += program.total_funds;
+                total_remaining += program.remaining_balance;
+                // Payouts volume = Total - Remaining (roughly, assuming no other drains)
+                total_payouts += program.total_funds - program.remaining_balance;
+            }
+        }
+        
+        ProgramStats {
+            total_programs: registry.len() as u64,
+            total_funds_locked: total_locked,
+            total_funds_remaining: total_remaining,
+            total_payouts_volume: total_payouts,
+        }
+    }
+
+    // ========================================================================
     // Monitoring & Analytics Functions
     // ========================================================================
 
@@ -3139,3 +3345,7 @@ mod test {
         assert_eq!(config.cooldown_period, 120);
     }
 }
+
+#[cfg(test)]
+mod test_query;
+
