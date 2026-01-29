@@ -4,6 +4,7 @@
  */
 
 import { API_BASE_URL } from '../config/api';
+import { SearchResults } from '../types/search';
 
 // Token management
 export const getAuthToken = (): string | null => {
@@ -151,6 +152,10 @@ export type LandingStats = {
 export const getLandingStats = () =>
   apiRequest<LandingStats>('/stats/landing');
 
+// Search
+export const search = (query: string) =>
+  apiRequest<SearchResults>(`/search?q=${encodeURIComponent(query)}`);
+
 // Authentication
 export const getCurrentUser = () =>
   apiRequest<{ 
@@ -167,6 +172,7 @@ export const getCurrentUser = () =>
     whatsapp?: string;
     twitter?: string;
     discord?: string;
+    is_kyc_verified?: boolean;
     github?: {
       login: string;
       avatar_url: string;
@@ -213,6 +219,7 @@ export const getUserProfile = () =>
     rewards_count: number;
     languages: Array<{ language: string; contribution_count: number }>;
     ecosystems: Array<{ ecosystem_name: string; contribution_count: number }>;
+    is_kyc_verified?: boolean;
     rank: {
       position: number | null;
       tier: string;
@@ -294,6 +301,7 @@ export const getPublicProfile = (userId?: string, login?: string) => {
     whatsapp?: string;
     twitter?: string;
     discord?: string;
+    is_kyc_verified?: boolean;
     rank: {
       position: number | null;
       tier: string;
