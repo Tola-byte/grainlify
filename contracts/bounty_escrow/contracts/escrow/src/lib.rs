@@ -500,7 +500,6 @@ pub enum RefundMode {
     Custom,
 }
 
-
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PayoutRecord {
@@ -1066,8 +1065,7 @@ impl BountyEscrowContract {
             .unwrap();
 
         // Allow release from Locked or PartiallyReleased states
-        if escrow.status != EscrowStatus::Locked
-            && escrow.status != EscrowStatus::PartiallyReleased
+        if escrow.status != EscrowStatus::Locked && escrow.status != EscrowStatus::PartiallyReleased
         {
             monitoring::track_operation(&env, symbol_short!("release"), admin.clone(), false);
             env.storage().instance().remove(&DataKey::ReentrancyGuard);
@@ -1078,12 +1076,22 @@ impl BountyEscrowContract {
         let payout_amount = match amount {
             Some(amt) => {
                 if amt <= 0 {
-                    monitoring::track_operation(&env, symbol_short!("release"), admin.clone(), false);
+                    monitoring::track_operation(
+                        &env,
+                        symbol_short!("release"),
+                        admin.clone(),
+                        false,
+                    );
                     env.storage().instance().remove(&DataKey::ReentrancyGuard);
                     return Err(Error::InvalidAmount);
                 }
                 if amt > escrow.remaining_amount {
-                    monitoring::track_operation(&env, symbol_short!("release"), admin.clone(), false);
+                    monitoring::track_operation(
+                        &env,
+                        symbol_short!("release"),
+                        admin.clone(),
+                        false,
+                    );
                     env.storage().instance().remove(&DataKey::ReentrancyGuard);
                     return Err(Error::InvalidAmount); // Attempt to over-pay
                 }
@@ -1498,7 +1506,6 @@ impl BountyEscrowContract {
         Ok(escrow.payout_history)
     }
 
-
     /// Gets refund eligibility information for a bounty.
     ///
     /// # Arguments
@@ -1649,11 +1656,11 @@ impl BountyEscrowContract {
                 depositor: item.depositor.clone(),
                 amount: item.amount,
                 status: EscrowStatus::Locked,
-                            deadline: item.deadline,
-                            refund_history: vec![&env],
-                            payout_history: vec![&env],
-                            remaining_amount: item.amount,
-                        };
+                deadline: item.deadline,
+                refund_history: vec![&env],
+                payout_history: vec![&env],
+                remaining_amount: item.amount,
+            };
             // Store escrow
             env.storage()
                 .persistent()
