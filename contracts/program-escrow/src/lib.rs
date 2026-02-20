@@ -5,13 +5,13 @@ use soroban_sdk::{
 };
 
 // Event types
-const PROGRAM_INITIALIZED: Symbol = symbol_short!("ProgramInit");
-const FUNDS_LOCKED: Symbol = symbol_short!("FundsLocked");
-const BATCH_PAYOUT: Symbol = symbol_short!("BatchPayout");
+const PROGRAM_INITIALIZED: Symbol = symbol_short!("PrgInit");
+const FUNDS_LOCKED: Symbol = symbol_short!("FndsLock");
+const BATCH_PAYOUT: Symbol = symbol_short!("BatchPay");
 const PAYOUT: Symbol = symbol_short!("Payout");
 
 // Storage keys
-const PROGRAM_DATA: Symbol = symbol_short!("ProgramData");
+const PROGRAM_DATA: Symbol = symbol_short!("ProgData");
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -57,7 +57,6 @@ impl ProgramEscrowContract {
             panic!("Program already initialized");
         }
 
-        let contract_address = env.current_contract_address();
         let program_data = ProgramData {
             program_id: program_id.clone(),
             total_funds: 0,
@@ -133,10 +132,7 @@ impl ProgramEscrowContract {
             .get(&PROGRAM_DATA)
             .unwrap_or_else(|| panic!("Program not initialized"));
 
-        let caller = env.invoker();
-        if caller != program_data.authorized_payout_key {
-            panic!("Unauthorized: only authorized payout key can trigger payouts");
-        }
+        program_data.authorized_payout_key.require_auth();
 
         // Validate input lengths match
         if recipients.len() != amounts.len() {
@@ -150,20 +146,17 @@ impl ProgramEscrowContract {
         // Calculate total payout amount
         let mut total_payout: i128 = 0;
         for amount in amounts.iter() {
-            if *amount <= 0 {
+            if amount <= 0 {
                 panic!("All amounts must be greater than zero");
             }
             total_payout = total_payout
-                .checked_add(*amount)
+                .checked_add(amount)
                 .unwrap_or_else(|| panic!("Payout amount overflow"));
         }
 
         // Validate sufficient balance
         if total_payout > program_data.remaining_balance {
-            panic!(
-                "Insufficient balance: requested {}, available {}",
-                total_payout, program_data.remaining_balance
-            );
+            panic!("Insufficient balance");
         }
 
         // Execute transfers
@@ -172,16 +165,17 @@ impl ProgramEscrowContract {
         let contract_address = env.current_contract_address();
         let token_client = token::Client::new(&env, &program_data.token_address);
 
-        for (i, recipient) in recipients.iter().enumerate() {
+        for i in 0..recipients.len() {
+            let recipient = recipients.get(i).unwrap();
             let amount = amounts.get(i).unwrap();
 
             // Transfer funds from contract to recipient
-            token_client.transfer(&contract_address, recipient, amount);
+            token_client.transfer(&contract_address, &recipient, &amount);
 
             // Record payout
             let payout_record = PayoutRecord {
-                recipient: recipient.clone(),
-                amount: *amount,
+                recipient,
+                amount,
                 timestamp,
             };
             updated_history.push_back(payout_record);
@@ -225,10 +219,7 @@ impl ProgramEscrowContract {
             .get(&PROGRAM_DATA)
             .unwrap_or_else(|| panic!("Program not initialized"));
 
-        let caller = env.invoker();
-        if caller != program_data.authorized_payout_key {
-            panic!("Unauthorized: only authorized payout key can trigger payouts");
-        }
+        program_data.authorized_payout_key.require_auth();
 
         // Validate amount
         if amount <= 0 {
@@ -237,10 +228,7 @@ impl ProgramEscrowContract {
 
         // Validate sufficient balance
         if amount > program_data.remaining_balance {
-            panic!(
-                "Insufficient balance: requested {}, available {}",
-                amount, program_data.remaining_balance
-            );
+            panic!("Insufficient balance");
         }
 
         // Transfer funds from contract to recipient
