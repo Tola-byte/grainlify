@@ -143,9 +143,19 @@
 // (after `mod anti_abuse;` and before the contract struct)
 
 mod error_recovery;
+mod reentrancy_guard;
 
 #[cfg(test)]
 mod error_recovery_tests;
+
+#[cfg(test)]
+mod reentrancy_tests;
+
+#[cfg(test)]
+mod reentrancy_guard_standalone_test;
+
+#[cfg(test)]
+mod malicious_reentrant;
 
 // ── Step 2: Add these public contract functions to the ProgramEscrowContract
 //    impl block (alongside the existing admin functions) ──────────────────
@@ -287,6 +297,7 @@ const PROGRAM_INITIALIZED: Symbol = symbol_short!("PrgInit");
 const FUNDS_LOCKED: Symbol = symbol_short!("FndsLock");
 const BATCH_PAYOUT: Symbol = symbol_short!("BatchPay");
 const PAYOUT: Symbol = symbol_short!("Payout");
+const EVENT_VERSION_V2: u32 = 2;
 const PAUSE_STATE_CHANGED: Symbol = symbol_short!("PauseSt");
 
 // Storage keys
@@ -303,6 +314,45 @@ pub struct PayoutRecord {
     pub recipient: Address,
     pub amount: i128,
     pub timestamp: u64,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProgramInitializedEvent {
+    pub version: u32,
+    pub program_id: String,
+    pub authorized_payout_key: Address,
+    pub token_address: Address,
+    pub total_funds: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FundsLockedEvent {
+    pub version: u32,
+    pub program_id: String,
+    pub amount: i128,
+    pub remaining_balance: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchPayoutEvent {
+    pub version: u32,
+    pub program_id: String,
+    pub recipient_count: u32,
+    pub total_amount: i128,
+    pub remaining_balance: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PayoutEvent {
+    pub version: u32,
+    pub program_id: String,
+    pub recipient: Address,
+    pub amount: i128,
+    pub remaining_balance: i128,
 }
 
 #[contracttype]
@@ -481,7 +531,13 @@ impl ProgramEscrowContract {
         // Emit ProgramInitialized event
         env.events().publish(
             (PROGRAM_INITIALIZED,),
-            (program_id, authorized_payout_key, token_address, 0i128),
+            ProgramInitializedEvent {
+                version: EVENT_VERSION_V2,
+                program_id,
+                authorized_payout_key,
+                token_address,
+                total_funds: 0i128,
+            },
         );
 
         program_data
@@ -642,11 +698,12 @@ impl ProgramEscrowContract {
         // Emit FundsLocked event
         env.events().publish(
             (FUNDS_LOCKED,),
-            (
-                program_data.program_id.clone(),
+            FundsLockedEvent {
+                version: EVENT_VERSION_V2,
+                program_id: program_data.program_id.clone(),
                 amount,
-                program_data.remaining_balance,
-            ),
+                remaining_balance: program_data.remaining_balance,
+            },
         );
 
         program_data
@@ -741,25 +798,35 @@ impl ProgramEscrowContract {
     /// # Returns
     /// Updated ProgramData after payouts
     pub fn batch_payout(env: Env, recipients: Vec<Address>, amounts: Vec<i128>) -> ProgramData {
+        // Reentrancy guard: Check and set
+        reentrancy_guard::check_not_entered(&env);
+        reentrancy_guard::set_entered(&env);
+
         if Self::check_paused(&env, symbol_short!("release")) {
+            reentrancy_guard::clear_entered(&env);
             panic!("Funds Paused");
         }
 
         // Verify authorization
-        let program_data: ProgramData = env
-            .storage()
-            .instance()
-            .get(&PROGRAM_DATA)
-            .unwrap_or_else(|| panic!("Program not initialized"));
+        let program_data: ProgramData =
+            env.storage()
+                .instance()
+                .get(&PROGRAM_DATA)
+                .unwrap_or_else(|| {
+                    reentrancy_guard::clear_entered(&env);
+                    panic!("Program not initialized")
+                });
 
         program_data.authorized_payout_key.require_auth();
 
         // Validate input lengths match
         if recipients.len() != amounts.len() {
+            reentrancy_guard::clear_entered(&env);
             panic!("Recipients and amounts vectors must have the same length");
         }
 
         if recipients.len() == 0 {
+            reentrancy_guard::clear_entered(&env);
             panic!("Cannot process empty batch");
         }
 
@@ -767,15 +834,18 @@ impl ProgramEscrowContract {
         let mut total_payout: i128 = 0;
         for amount in amounts.iter() {
             if amount <= 0 {
+                reentrancy_guard::clear_entered(&env);
                 panic!("All amounts must be greater than zero");
             }
-            total_payout = total_payout
-                .checked_add(amount)
-                .unwrap_or_else(|| panic!("Payout amount overflow"));
+            total_payout = total_payout.checked_add(amount).unwrap_or_else(|| {
+                reentrancy_guard::clear_entered(&env);
+                panic!("Payout amount overflow")
+            });
         }
 
         // Validate sufficient balance
         if total_payout > program_data.remaining_balance {
+            reentrancy_guard::clear_entered(&env);
             panic!("Insufficient balance");
         }
 
@@ -812,13 +882,17 @@ impl ProgramEscrowContract {
         // Emit BatchPayout event
         env.events().publish(
             (BATCH_PAYOUT,),
-            (
-                updated_data.program_id.clone(),
-                recipients.len() as u32,
-                total_payout,
-                updated_data.remaining_balance,
-            ),
+            BatchPayoutEvent {
+                version: EVENT_VERSION_V2,
+                program_id: updated_data.program_id.clone(),
+                recipient_count: recipients.len() as u32,
+                total_amount: total_payout,
+                remaining_balance: updated_data.remaining_balance,
+            },
         );
+
+        // Clear reentrancy guard before returning
+        reentrancy_guard::clear_entered(&env);
 
         updated_data
     }
@@ -832,26 +906,36 @@ impl ProgramEscrowContract {
     /// # Returns
     /// Updated ProgramData after payout
     pub fn single_payout(env: Env, recipient: Address, amount: i128) -> ProgramData {
+        // Reentrancy guard: Check and set
+        reentrancy_guard::check_not_entered(&env);
+        reentrancy_guard::set_entered(&env);
+
         if Self::check_paused(&env, symbol_short!("release")) {
+            reentrancy_guard::clear_entered(&env);
             panic!("Funds Paused");
         }
 
         // Verify authorization
-        let program_data: ProgramData = env
-            .storage()
-            .instance()
-            .get(&PROGRAM_DATA)
-            .unwrap_or_else(|| panic!("Program not initialized"));
+        let program_data: ProgramData =
+            env.storage()
+                .instance()
+                .get(&PROGRAM_DATA)
+                .unwrap_or_else(|| {
+                    reentrancy_guard::clear_entered(&env);
+                    panic!("Program not initialized")
+                });
 
         program_data.authorized_payout_key.require_auth();
 
         // Validate amount
         if amount <= 0 {
+            reentrancy_guard::clear_entered(&env);
             panic!("Amount must be greater than zero");
         }
 
         // Validate sufficient balance
         if amount > program_data.remaining_balance {
+            reentrancy_guard::clear_entered(&env);
             panic!("Insufficient balance");
         }
 
@@ -882,13 +966,17 @@ impl ProgramEscrowContract {
         // Emit Payout event
         env.events().publish(
             (PAYOUT,),
-            (
-                updated_data.program_id.clone(),
+            PayoutEvent {
+                version: EVENT_VERSION_V2,
+                program_id: updated_data.program_id.clone(),
                 recipient,
                 amount,
-                updated_data.remaining_balance,
-            ),
+                remaining_balance: updated_data.remaining_balance,
+            },
         );
+
+        // Clear reentrancy guard before returning
+        reentrancy_guard::clear_entered(&env);
 
         updated_data
     }
@@ -967,11 +1055,18 @@ impl ProgramEscrowContract {
 
     /// Trigger all due schedules where `now >= release_timestamp`.
     pub fn trigger_program_releases(env: Env) -> u32 {
+        // Reentrancy guard: Check and set
+        reentrancy_guard::check_not_entered(&env);
+        reentrancy_guard::set_entered(&env);
+
         let mut program_data: ProgramData = env
             .storage()
             .instance()
             .get(&PROGRAM_DATA)
-            .unwrap_or_else(|| panic!("Program not initialized"));
+            .unwrap_or_else(|| {
+                reentrancy_guard::clear_entered(&env);
+                panic!("Program not initialized")
+            });
         program_data.authorized_payout_key.require_auth();
 
         let mut schedules: Vec<ProgramReleaseSchedule> = env
@@ -997,6 +1092,7 @@ impl ProgramEscrowContract {
             }
 
             if schedule.amount > program_data.remaining_balance {
+                reentrancy_guard::clear_entered(&env);
                 panic!("Insufficient balance");
             }
 
@@ -1024,6 +1120,9 @@ impl ProgramEscrowContract {
         env.storage()
             .instance()
             .set(&RELEASE_HISTORY, &release_history);
+
+        // Clear reentrancy guard before returning
+        reentrancy_guard::clear_entered(&env);
 
         released_count
     }
@@ -2036,6 +2135,254 @@ mod test {
         assert_eq!(info1.remaining_balance, amount1);
         assert_eq!(info2.total_funds, amount2);
         assert_eq!(info2.remaining_balance, amount2);
+    }
+
+    #[test]
+    fn test_multi_tenant_payout_history_isolation() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, ProgramEscrowContract);
+        let client = ProgramEscrowContractClient::new(&env, &contract_id);
+        let token_admin = Address::generate(&env);
+        let token_client = create_token_contract(&env, &token_admin);
+
+        let backend1 = Address::generate(&env);
+        let backend2 = Address::generate(&env);
+
+        let prog1 = String::from_str(&env, "Program1");
+        let prog2 = String::from_str(&env, "Program2");
+
+        // Mint tokens to backends
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_client.address);
+        let amount1 = 10_000_0000000i128;
+        let amount2 = 20_000_0000000i128;
+        token_admin_client.mint(&backend1, &amount1);
+        token_admin_client.mint(&backend2, &amount2);
+
+        // Register programs
+        client.initialize_program(&prog1, &backend1, &token_client.address);
+        client.initialize_program(&prog2, &backend2, &token_client.address);
+
+        // Transfer tokens to contract and lock funds
+        token_client.transfer(&backend1, &contract_id, &amount1);
+        token_client.transfer(&backend2, &contract_id, &amount2);
+        client.lock_program_funds(&prog1, &amount1);
+        client.lock_program_funds(&prog2, &amount2);
+
+        // Perform payouts on each program
+        let recipient1 = Address::generate(&env);
+        let recipient2 = Address::generate(&env);
+        let recipient3 = Address::generate(&env);
+        let recipient4 = Address::generate(&env);
+
+        // Payouts for program 1
+        client.single_payout(&prog1, &recipient1, &2_000_0000000);
+        client.single_payout(&prog1, &recipient2, &3_000_0000000);
+
+        // Payouts for program 2
+        client.single_payout(&prog2, &recipient3, &5_000_0000000);
+        client.single_payout(&prog2, &recipient4, &7_000_0000000);
+
+        // Verify payout history isolation
+        let info1 = client.get_program_info(&prog1);
+        let info2 = client.get_program_info(&prog2);
+
+        // Program 1 should have 2 payouts
+        assert_eq!(info1.payout_history.len(), 2);
+        assert_eq!(info1.payout_history.get(0).unwrap().recipient, recipient1);
+        assert_eq!(info1.payout_history.get(0).unwrap().amount, 2_000_0000000);
+        assert_eq!(info1.payout_history.get(1).unwrap().recipient, recipient2);
+        assert_eq!(info1.payout_history.get(1).unwrap().amount, 3_000_0000000);
+        assert_eq!(info1.remaining_balance, 5_000_0000000); // 10 - 2 - 3
+
+        // Program 2 should have 2 different payouts
+        assert_eq!(info2.payout_history.len(), 2);
+        assert_eq!(info2.payout_history.get(0).unwrap().recipient, recipient3);
+        assert_eq!(info2.payout_history.get(0).unwrap().amount, 5_000_0000000);
+        assert_eq!(info2.payout_history.get(1).unwrap().recipient, recipient4);
+        assert_eq!(info2.payout_history.get(1).unwrap().amount, 7_000_0000000);
+        assert_eq!(info2.remaining_balance, 8_000_0000000); // 20 - 5 - 7
+    }
+
+    #[test]
+    fn test_multi_tenant_release_schedule_isolation() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, ProgramEscrowContract);
+        let client = ProgramEscrowContractClient::new(&env, &contract_id);
+        let token_client = create_token_contract(&env, &Address::generate(&env));
+
+        let backend1 = Address::generate(&env);
+        let backend2 = Address::generate(&env);
+
+        let prog1 = String::from_str(&env, "Program1");
+        let prog2 = String::from_str(&env, "Program2");
+
+        // Register programs
+        client.initialize_program(&prog1, &backend1, &token_client.address);
+        client.initialize_program(&prog2, &backend2, &token_client.address);
+
+        // Lock funds
+        let amount1 = 10_000_0000000i128;
+        let amount2 = 20_000_0000000i128;
+        client.lock_program_funds(&prog1, &amount1);
+        client.lock_program_funds(&prog2, &amount2);
+
+        // Create release schedules for each program
+        let winner1 = Address::generate(&env);
+        let winner2 = Address::generate(&env);
+        let winner3 = Address::generate(&env);
+        let winner4 = Address::generate(&env);
+
+        let future_timestamp = env.ledger().timestamp() + 1000;
+
+        // Schedules for program 1
+        client.create_program_release_schedule(&prog1, &2_000_0000000, &future_timestamp, &winner1);
+        client.create_program_release_schedule(
+            &prog1,
+            &3_000_0000000,
+            &(future_timestamp + 100),
+            &winner2,
+        );
+
+        // Schedules for program 2
+        client.create_program_release_schedule(&prog2, &5_000_0000000, &future_timestamp, &winner3);
+        client.create_program_release_schedule(
+            &prog2,
+            &7_000_0000000,
+            &(future_timestamp + 100),
+            &winner4,
+        );
+
+        // Verify schedule isolation
+        let schedules1 = client.get_all_prog_release_schedules(&prog1);
+        let schedules2 = client.get_all_prog_release_schedules(&prog2);
+
+        assert_eq!(schedules1.len(), 2);
+        assert_eq!(schedules1.get(0).unwrap().amount, 2_000_0000000);
+        assert_eq!(schedules1.get(0).unwrap().recipient, winner1);
+        assert_eq!(schedules1.get(1).unwrap().amount, 3_000_0000000);
+        assert_eq!(schedules1.get(1).unwrap().recipient, winner2);
+
+        assert_eq!(schedules2.len(), 2);
+        assert_eq!(schedules2.get(0).unwrap().amount, 5_000_0000000);
+        assert_eq!(schedules2.get(0).unwrap().recipient, winner3);
+        assert_eq!(schedules2.get(1).unwrap().amount, 7_000_0000000);
+        assert_eq!(schedules2.get(1).unwrap().recipient, winner4);
+    }
+
+    #[test]
+    fn test_multi_tenant_release_history_isolation() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, ProgramEscrowContract);
+        let client = ProgramEscrowContractClient::new(&env, &contract_id);
+        let token_admin = Address::generate(&env);
+        let token_client = create_token_contract(&env, &token_admin);
+
+        let backend1 = Address::generate(&env);
+        let backend2 = Address::generate(&env);
+
+        let prog1 = String::from_str(&env, "Program1");
+        let prog2 = String::from_str(&env, "Program2");
+
+        // Mint tokens to backends
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_client.address);
+        let amount1 = 10_000_0000000i128;
+        let amount2 = 20_000_0000000i128;
+        token_admin_client.mint(&backend1, &amount1);
+        token_admin_client.mint(&backend2, &amount2);
+
+        // Register programs
+        client.initialize_program(&prog1, &backend1, &token_client.address);
+        client.initialize_program(&prog2, &backend2, &token_client.address);
+
+        // Transfer tokens to contract and lock funds
+        token_client.transfer(&backend1, &contract_id, &amount1);
+        token_client.transfer(&backend2, &contract_id, &amount2);
+        client.lock_program_funds(&prog1, &amount1);
+        client.lock_program_funds(&prog2, &amount2);
+
+        // Create and release schedules
+        let winner1 = Address::generate(&env);
+        let winner2 = Address::generate(&env);
+
+        let future_timestamp = env.ledger().timestamp() + 100;
+
+        // Create schedules for both programs
+        client.create_program_release_schedule(&prog1, &4_000_0000000, &future_timestamp, &winner1);
+        client.create_program_release_schedule(&prog2, &8_000_0000000, &future_timestamp, &winner2);
+
+        // Advance time to allow release
+        env.ledger().set_timestamp(future_timestamp + 1);
+
+        // Release schedules
+        client.release_program_schedule_manual(&prog1, &1); // Release first schedule of program 1
+        client.release_program_schedule_manual(&prog2, &1); // Release first schedule of program 2
+
+        // Verify release history isolation
+        let history1 = client.get_program_release_history(&prog1);
+        let history2 = client.get_program_release_history(&prog2);
+
+        assert_eq!(history1.len(), 1);
+        assert_eq!(history1.get(0).unwrap().amount, 4_000_0000000);
+        assert_eq!(history1.get(0).unwrap().recipient, winner1);
+
+        assert_eq!(history2.len(), 1);
+        assert_eq!(history2.get(0).unwrap().amount, 8_000_0000000);
+        assert_eq!(history2.get(0).unwrap().recipient, winner2);
+    }
+
+    #[test]
+    fn test_multi_tenant_analytics_isolation_concept() {
+        // Note: Current analytics are global, but this test demonstrates
+        // the concept of what program-specific analytics isolation would look like
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, ProgramEscrowContract);
+        let client = ProgramEscrowContractClient::new(&env, &contract_id);
+        let token_admin = Address::generate(&env);
+        let token_client = create_token_contract(&env, &token_admin);
+
+        let backend1 = Address::generate(&env);
+        let backend2 = Address::generate(&env);
+
+        let prog1 = String::from_str(&env, "Program1");
+        let prog2 = String::from_str(&env, "Program2");
+
+        // Mint tokens to backends
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_client.address);
+        let amount1 = 10_000_0000000i128;
+        let amount2 = 20_000_0000000i128;
+        token_admin_client.mint(&backend1, &amount1);
+        token_admin_client.mint(&backend2, &amount2);
+
+        // Register programs
+        client.initialize_program(&prog1, &backend1, &token_client.address);
+        client.initialize_program(&prog2, &backend2, &token_client.address);
+
+        // Transfer tokens to contract and lock funds
+        token_client.transfer(&backend1, &contract_id, &amount1);
+        token_client.transfer(&backend2, &contract_id, &amount2);
+        client.lock_program_funds(&prog1, &amount1);
+        client.lock_program_funds(&prog2, &amount2);
+
+        // Perform operations on each program (just lock funds for now)
+        // Note: Payouts would be tested separately for authorization
+
+        // Global analytics should reflect all operations
+        let analytics = client.get_analytics();
+        assert!(analytics.operation_count >= 2); // init x2, lock x2
+
+        // In a future version with program-specific analytics, we would test:
+        // let analytics1 = client.get_program_analytics(&prog1);
+        // let analytics2 = client.get_program_analytics(&prog2);
+        // assert_eq!(analytics1.operation_count, 2); // init, lock
+        // assert_eq!(analytics2.operation_count, 2); // init, lock
     }
 
     #[test]
