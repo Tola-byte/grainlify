@@ -385,10 +385,10 @@ fn test_update_fee_config_with_zero_lock_fee() {
 
     // Test: Set lock_fee_rate to 0 (should succeed)
     let result = client.try_update_fee_config(
-        &Some(0),      // lock_fee_rate: 0%
-        &None,         // release_fee_rate: unchanged
+        &Some(0), // lock_fee_rate: 0%
+        &None,    // release_fee_rate: unchanged
         &Some(fee_recipient.clone()),
-        &None,         // fee_enabled: unchanged
+        &None, // fee_enabled: unchanged
     );
     assert!(result.is_ok());
 
@@ -410,10 +410,10 @@ fn test_update_fee_config_with_zero_release_fee() {
 
     // Test: Set release_fee_rate to 0 (should succeed)
     let result = client.try_update_fee_config(
-        &None,         // lock_fee_rate: unchanged
-        &Some(0),      // release_fee_rate: 0%
+        &None,    // lock_fee_rate: unchanged
+        &Some(0), // release_fee_rate: 0%
         &Some(fee_recipient.clone()),
-        &None,         // fee_enabled: unchanged
+        &None, // fee_enabled: unchanged
     );
     assert!(result.is_ok());
 
@@ -435,10 +435,10 @@ fn test_update_fee_config_with_max_lock_fee() {
 
     // Test: Set lock_fee_rate to MAX_FEE_RATE (5000 = 50%) (should succeed)
     let result = client.try_update_fee_config(
-        &Some(5000),   // lock_fee_rate: 50% (MAX_FEE_RATE)
-        &None,         // release_fee_rate: unchanged
+        &Some(5000), // lock_fee_rate: 50% (MAX_FEE_RATE)
+        &None,       // release_fee_rate: unchanged
         &Some(fee_recipient.clone()),
-        &None,         // fee_enabled: unchanged
+        &None, // fee_enabled: unchanged
     );
     assert!(result.is_ok());
 
@@ -460,10 +460,10 @@ fn test_update_fee_config_with_max_release_fee() {
 
     // Test: Set release_fee_rate to MAX_FEE_RATE (5000 = 50%) (should succeed)
     let result = client.try_update_fee_config(
-        &None,         // lock_fee_rate: unchanged
-        &Some(5000),   // release_fee_rate: 50% (MAX_FEE_RATE)
+        &None,       // lock_fee_rate: unchanged
+        &Some(5000), // release_fee_rate: 50% (MAX_FEE_RATE)
         &Some(fee_recipient.clone()),
-        &None,         // fee_enabled: unchanged
+        &None, // fee_enabled: unchanged
     );
     assert!(result.is_ok());
 
@@ -485,17 +485,16 @@ fn test_update_fee_config_rejects_negative_lock_fee() {
 
     let original_config = client.get_fee_config();
 
-    let result = client.try_update_fee_config(
-        &Some(-1),
-        &None,
-        &Some(fee_recipient.clone()),
-        &None,
-    );
+    let result =
+        client.try_update_fee_config(&Some(-1), &None, &Some(fee_recipient.clone()), &None);
     assert_eq!(result, Err(Ok(ContractError::InvalidFeeRate)));
 
     let current_config = client.get_fee_config();
     assert_eq!(current_config.lock_fee_rate, original_config.lock_fee_rate);
-    assert_eq!(current_config.release_fee_rate, original_config.release_fee_rate);
+    assert_eq!(
+        current_config.release_fee_rate,
+        original_config.release_fee_rate
+    );
 }
 
 #[test]
@@ -511,17 +510,16 @@ fn test_update_fee_config_rejects_negative_release_fee() {
 
     let original_config = client.get_fee_config();
 
-    let result = client.try_update_fee_config(
-        &None,
-        &Some(-1),
-        &Some(fee_recipient.clone()),
-        &None,
-    );
+    let result =
+        client.try_update_fee_config(&None, &Some(-1), &Some(fee_recipient.clone()), &None);
     assert_eq!(result, Err(Ok(ContractError::InvalidFeeRate)));
 
     let current_config = client.get_fee_config();
     assert_eq!(current_config.lock_fee_rate, original_config.lock_fee_rate);
-    assert_eq!(current_config.release_fee_rate, original_config.release_fee_rate);
+    assert_eq!(
+        current_config.release_fee_rate,
+        original_config.release_fee_rate
+    );
 }
 
 #[test]
@@ -537,17 +535,16 @@ fn test_update_fee_config_rejects_over_max_lock_fee() {
 
     let original_config = client.get_fee_config();
 
-    let result = client.try_update_fee_config(
-        &Some(5001),
-        &None,
-        &Some(fee_recipient.clone()),
-        &None,
-    );
+    let result =
+        client.try_update_fee_config(&Some(5001), &None, &Some(fee_recipient.clone()), &None);
     assert_eq!(result, Err(Ok(ContractError::InvalidFeeRate)));
 
     let current_config = client.get_fee_config();
     assert_eq!(current_config.lock_fee_rate, original_config.lock_fee_rate);
-    assert_eq!(current_config.release_fee_rate, original_config.release_fee_rate);
+    assert_eq!(
+        current_config.release_fee_rate,
+        original_config.release_fee_rate
+    );
 }
 
 #[test]
@@ -563,17 +560,16 @@ fn test_update_fee_config_rejects_over_max_release_fee() {
 
     let original_config = client.get_fee_config();
 
-    let result = client.try_update_fee_config(
-        &None,
-        &Some(5001),
-        &Some(fee_recipient.clone()),
-        &None,
-    );
+    let result =
+        client.try_update_fee_config(&None, &Some(5001), &Some(fee_recipient.clone()), &None);
     assert_eq!(result, Err(Ok(ContractError::InvalidFeeRate)));
 
     let current_config = client.get_fee_config();
     assert_eq!(current_config.lock_fee_rate, original_config.lock_fee_rate);
-    assert_eq!(current_config.release_fee_rate, original_config.release_fee_rate);
+    assert_eq!(
+        current_config.release_fee_rate,
+        original_config.release_fee_rate
+    );
 }
 
 #[test]
@@ -589,17 +585,16 @@ fn test_update_fee_config_rejects_overflow_lock_fee() {
 
     let original_config = client.get_fee_config();
 
-    let result = client.try_update_fee_config(
-        &Some(i128::MAX),
-        &None,
-        &Some(fee_recipient.clone()),
-        &None,
-    );
+    let result =
+        client.try_update_fee_config(&Some(i128::MAX), &None, &Some(fee_recipient.clone()), &None);
     assert_eq!(result, Err(Ok(ContractError::InvalidFeeRate)));
 
     let current_config = client.get_fee_config();
     assert_eq!(current_config.lock_fee_rate, original_config.lock_fee_rate);
-    assert_eq!(current_config.release_fee_rate, original_config.release_fee_rate);
+    assert_eq!(
+        current_config.release_fee_rate,
+        original_config.release_fee_rate
+    );
 }
 
 #[test]
@@ -615,17 +610,16 @@ fn test_update_fee_config_rejects_overflow_release_fee() {
 
     let original_config = client.get_fee_config();
 
-    let result = client.try_update_fee_config(
-        &None,
-        &Some(i128::MAX),
-        &Some(fee_recipient.clone()),
-        &None,
-    );
+    let result =
+        client.try_update_fee_config(&None, &Some(i128::MAX), &Some(fee_recipient.clone()), &None);
     assert_eq!(result, Err(Ok(ContractError::InvalidFeeRate)));
 
     let current_config = client.get_fee_config();
     assert_eq!(current_config.lock_fee_rate, original_config.lock_fee_rate);
-    assert_eq!(current_config.release_fee_rate, original_config.release_fee_rate);
+    assert_eq!(
+        current_config.release_fee_rate,
+        original_config.release_fee_rate
+    );
 }
 
 #[test]
@@ -641,8 +635,8 @@ fn test_update_fee_config_both_rates_zero() {
 
     // Test: Set both lock and release fees to 0 (should succeed)
     let result = client.try_update_fee_config(
-        &Some(0),      // lock_fee_rate: 0%
-        &Some(0),      // release_fee_rate: 0%
+        &Some(0), // lock_fee_rate: 0%
+        &Some(0), // release_fee_rate: 0%
         &Some(fee_recipient.clone()),
         &None,
     );
@@ -666,8 +660,8 @@ fn test_update_fee_config_both_rates_at_max() {
 
     // Test: Set both lock and release fees to MAX_FEE_RATE (should succeed)
     let result = client.try_update_fee_config(
-        &Some(5000),   // lock_fee_rate: 50% (MAX_FEE_RATE)
-        &Some(5000),   // release_fee_rate: 50% (MAX_FEE_RATE)
+        &Some(5000), // lock_fee_rate: 50% (MAX_FEE_RATE)
+        &Some(5000), // release_fee_rate: 50% (MAX_FEE_RATE)
         &Some(fee_recipient.clone()),
         &None,
     );
@@ -691,8 +685,8 @@ fn test_update_fee_config_valid_intermediate_rates() {
 
     // Test: Set lock to 100 (1%) and release to 250 (2.5%) (should succeed)
     let result = client.try_update_fee_config(
-        &Some(100),    // lock_fee_rate: 1% (100 basis points)
-        &Some(250),    // release_fee_rate: 2.5% (250 basis points)
+        &Some(100), // lock_fee_rate: 1% (100 basis points)
+        &Some(250), // release_fee_rate: 2.5% (250 basis points)
         &Some(fee_recipient.clone()),
         &None,
     );
@@ -724,32 +718,22 @@ fn test_update_fee_config_partial_updates_preserve_existing_values() {
     );
 
     // Second update: Only update lock fee, other values should remain unchanged
-    client.update_fee_config(
-        &Some(300),
-        &None,
-        &None,
-        &None,
-    );
+    client.update_fee_config(&Some(300), &None, &None, &None);
 
     let config = client.get_fee_config();
     assert_eq!(config.lock_fee_rate, 300);
-    assert_eq!(config.release_fee_rate, 200);  // Should remain 200
-    assert_eq!(config.fee_recipient, fee_recipient_1);  // Should remain recipient_1
-    assert_eq!(config.fee_enabled, true);  // Should remain true
+    assert_eq!(config.release_fee_rate, 200); // Should remain 200
+    assert_eq!(config.fee_recipient, fee_recipient_1); // Should remain recipient_1
+    assert_eq!(config.fee_enabled, true); // Should remain true
 
     // Third update: Update recipient and enabled flag
-    client.update_fee_config(
-        &None,
-        &None,
-        &Some(fee_recipient_2.clone()),
-        &Some(false),
-    );
+    client.update_fee_config(&None, &None, &Some(fee_recipient_2.clone()), &Some(false));
 
     let config = client.get_fee_config();
-    assert_eq!(config.lock_fee_rate, 300);  // Should remain 300
-    assert_eq!(config.release_fee_rate, 200);  // Should remain 200
-    assert_eq!(config.fee_recipient, fee_recipient_2);  // Should be updated to recipient_2
-    assert_eq!(config.fee_enabled, false);  // Should be updated to false
+    assert_eq!(config.lock_fee_rate, 300); // Should remain 300
+    assert_eq!(config.release_fee_rate, 200); // Should remain 200
+    assert_eq!(config.fee_recipient, fee_recipient_2); // Should be updated to recipient_2
+    assert_eq!(config.fee_enabled, false); // Should be updated to false
 }
 
 #[test]
@@ -763,21 +747,11 @@ fn test_update_fee_config_fails_with_one_invalid_rate_preserves_state() {
 
     client.init(&admin, &token);
 
-    client.update_fee_config(
-        &Some(100),
-        &Some(200),
-        &Some(fee_recipient.clone()),
-        &None,
-    );
+    client.update_fee_config(&Some(100), &Some(200), &Some(fee_recipient.clone()), &None);
 
     let original_config = client.get_fee_config();
 
-    let result = client.try_update_fee_config(
-        &Some(300),
-        &Some(5001),
-        &None,
-        &None,
-    );
+    let result = client.try_update_fee_config(&Some(300), &Some(5001), &None, &None);
     assert_eq!(result, Err(Ok(ContractError::InvalidFeeRate)));
 
     let config = client.get_fee_config();
@@ -798,17 +772,16 @@ fn test_update_fee_config_rejects_100_percent_lock_fee() {
 
     let original_config = client.get_fee_config();
 
-    let result = client.try_update_fee_config(
-        &Some(10_000),
-        &None,
-        &Some(fee_recipient.clone()),
-        &None,
-    );
+    let result =
+        client.try_update_fee_config(&Some(10_000), &None, &Some(fee_recipient.clone()), &None);
     assert_eq!(result, Err(Ok(ContractError::InvalidFeeRate)));
 
     let current_config = client.get_fee_config();
     assert_eq!(current_config.lock_fee_rate, original_config.lock_fee_rate);
-    assert_eq!(current_config.release_fee_rate, original_config.release_fee_rate);
+    assert_eq!(
+        current_config.release_fee_rate,
+        original_config.release_fee_rate
+    );
 }
 
 #[test]
@@ -824,17 +797,16 @@ fn test_update_fee_config_rejects_100_percent_release_fee() {
 
     let original_config = client.get_fee_config();
 
-    let result = client.try_update_fee_config(
-        &None,
-        &Some(10_000),
-        &Some(fee_recipient.clone()),
-        &None,
-    );
+    let result =
+        client.try_update_fee_config(&None, &Some(10_000), &Some(fee_recipient.clone()), &None);
     assert_eq!(result, Err(Ok(ContractError::InvalidFeeRate)));
 
     let current_config = client.get_fee_config();
     assert_eq!(current_config.lock_fee_rate, original_config.lock_fee_rate);
-    assert_eq!(current_config.release_fee_rate, original_config.release_fee_rate);
+    assert_eq!(
+        current_config.release_fee_rate,
+        original_config.release_fee_rate
+    );
 }
 
 #[test]
@@ -850,17 +822,16 @@ fn test_update_fee_config_rejects_over_100_percent_lock_fee() {
 
     let original_config = client.get_fee_config();
 
-    let result = client.try_update_fee_config(
-        &Some(10_001),
-        &None,
-        &Some(fee_recipient.clone()),
-        &None,
-    );
+    let result =
+        client.try_update_fee_config(&Some(10_001), &None, &Some(fee_recipient.clone()), &None);
     assert_eq!(result, Err(Ok(ContractError::InvalidFeeRate)));
 
     let current_config = client.get_fee_config();
     assert_eq!(current_config.lock_fee_rate, original_config.lock_fee_rate);
-    assert_eq!(current_config.release_fee_rate, original_config.release_fee_rate);
+    assert_eq!(
+        current_config.release_fee_rate,
+        original_config.release_fee_rate
+    );
 }
 
 #[test]
@@ -876,16 +847,14 @@ fn test_update_fee_config_rejects_over_100_percent_release_fee() {
 
     let original_config = client.get_fee_config();
 
-    let result = client.try_update_fee_config(
-        &None,
-        &Some(10_001),
-        &Some(fee_recipient.clone()),
-        &None,
-    );
+    let result =
+        client.try_update_fee_config(&None, &Some(10_001), &Some(fee_recipient.clone()), &None);
     assert_eq!(result, Err(Ok(ContractError::InvalidFeeRate)));
 
     let current_config = client.get_fee_config();
     assert_eq!(current_config.lock_fee_rate, original_config.lock_fee_rate);
-    assert_eq!(current_config.release_fee_rate, original_config.release_fee_rate);
+    assert_eq!(
+        current_config.release_fee_rate,
+        original_config.release_fee_rate
+    );
 }
-
