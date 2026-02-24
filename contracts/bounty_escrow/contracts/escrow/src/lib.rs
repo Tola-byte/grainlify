@@ -2273,6 +2273,8 @@ mod test_analytics_monitoring;
 #[cfg(test)]
 mod test_auto_refund_permissions;
 #[cfg(test)]
+mod test_blacklist_and_whitelist;
+#[cfg(test)]
 mod test_bounty_escrow;
 #[cfg(test)]
 mod test_dispute_resolution;
@@ -2291,8 +2293,6 @@ mod test_metadata_tagging;
 mod test_partial_payout_rounding;
 #[cfg(test)]
 mod test_pause;
-#[cfg(test)]
-mod test_blacklist_and_whitelist;
 #[cfg(test)]
 mod escrow_status_transition_tests {
     use super::*;
