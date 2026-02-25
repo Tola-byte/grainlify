@@ -998,6 +998,24 @@ impl GrainlifyContract {
         next_id
     }
 
+    /// Returns retained configuration snapshots in chronological order.
+    pub fn list_config_snapshots(env: Env) -> Vec<CoreConfigSnapshot> {
+        let ids: Vec<u64> = env
+            .storage()
+            .instance()
+            .get(&DataKey::SnapshotIndex)
+            .unwrap_or(Vec::new(&env));
+
+        let mut snapshots: Vec<CoreConfigSnapshot> = Vec::new(&env);
+        for id in ids.iter() {
+            if let Some(snapshot) = env.storage().instance().get(&DataKey::ConfigSnapshot(id)) {
+                snapshots.push_back(snapshot);
+            }
+        }
+
+        snapshots
+    }
+
     /// Retrieves the chain identifier.
     pub fn get_chain_id(env: Env) -> Option<String> {
         env.storage().instance().get(&DataKey::ChainId)
@@ -1151,6 +1169,18 @@ impl GrainlifyContract {
 
         // Get current version
         let current_version = env.storage().instance().get(&DataKey::Version).unwrap_or(1);
+
+        // Idempotent retry: allow re-submitting a migration already recorded.
+        if env.storage().instance().has(&DataKey::MigrationState) {
+            let migration_state: MigrationState = env
+                .storage()
+                .instance()
+                .get(&DataKey::MigrationState)
+                .unwrap();
+            if migration_state.to_version == target_version {
+                return;
+            }
+        }
 
         // Validate target version
         if target_version <= current_version {
@@ -1321,14 +1351,18 @@ fn migrate_v2_to_v3(_env: &Env) {
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Env};
+    use soroban_sdk::{
+        testutils::{Address as _, Events},
+        Env,
+    };
 
     // Include end-to-end upgrade and migration tests
     pub mod e2e_upgrade_migration_tests;
     pub mod upgrade_rollback_tests;
 
     // WASM for testing
-    pub const WASM: &[u8] = include_bytes!("../target/wasm32-unknown-unknown/release/grainlify_core.wasm");
+    pub const WASM: &[u8] =
+        include_bytes!("../target/wasm32-unknown-unknown/release/grainlify_core.optimized.wasm");
 
     #[test]
     fn multisig_init_works() {
@@ -1893,9 +1927,6 @@ mod test {
     // Export WASM for testing upgrade/rollback scenarios
     // #[cfg(test)]
     // pub const WASM: &[u8] = include_bytes!("../target/wasm32v1-none/release/grainlify_core.wasm");
-
-    #[cfg(test)]
-    mod upgrade_rollback_tests;
 }
 
 // #[cfg(test)]
