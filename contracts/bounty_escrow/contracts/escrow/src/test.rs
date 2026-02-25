@@ -61,3 +61,20 @@ fn test_release_funds_out_of_order_nonce_rejected() {
     contract.lock_funds(&depositor, &9, &100_000_000_000, &0);
     contract.release_funds(&9, &contributor, &5);
 }
+
+#[test]
+#[should_panic(expected = "Error(Contract, #9)")]
+fn test_init_rejects_non_contract_asset_identifier() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(BountyEscrowContract, ());
+    let contract = BountyEscrowContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+
+    let issuer_admin = Address::generate(&env);
+    let stellar_asset = env.register_stellar_asset_contract_v2(issuer_admin);
+    let invalid_asset_id = stellar_asset.issuer().address();
+
+    contract.init(&admin, &invalid_asset_id);
+}

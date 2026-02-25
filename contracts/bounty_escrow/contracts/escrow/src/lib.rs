@@ -2,7 +2,7 @@
 use soroban_sdk::{contract, contracterror, contractimpl, contracttype, token, Address, Env, Symbol};
 
 extern crate grainlify_core;
-use grainlify_core::nonce;
+use grainlify_core::{asset, nonce};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -16,6 +16,7 @@ pub enum Error {
     DeadlineNotPassed = 6,
     Unauthorized = 7,
     InvalidNonce = 8,
+    InvalidAssetId = 9,
 }
 
 #[contracttype]
@@ -48,12 +49,14 @@ pub struct BountyEscrowContract;
 #[contractimpl]
 impl BountyEscrowContract {
     /// Initialize the contract with the admin address and the token address (XLM).
-    pub fn init(env: Env, admin: Address, token: Address) -> Result<(), Error> {
+    pub fn init(env: Env, admin: Address, token: asset::AssetId) -> Result<(), Error> {
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
         }
+        let normalized_token =
+            asset::normalize_asset_id(&env, &token).map_err(|_| Error::InvalidAssetId)?;
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::Token, &token);
+        env.storage().instance().set(&DataKey::Token, &normalized_token);
         Ok(())
     }
 

@@ -5,7 +5,7 @@ use soroban_sdk::{
 };
 
 extern crate grainlify_core;
-use grainlify_core::nonce;
+use grainlify_core::{asset, nonce};
 
 // Event types
 const PROGRAM_INITIALIZED: Symbol = symbol_short!("InitProg");
@@ -32,7 +32,7 @@ pub struct ProgramData {
     pub remaining_balance: i128,
     pub authorized_payout_key: Address,
     pub payout_history: Vec<PayoutRecord>,
-    pub token_address: Address, // Token contract address for transfers
+    pub token_address: asset::AssetId, // Canonical token contract identifier
 }
 
 #[contract]
@@ -53,12 +53,15 @@ impl ProgramEscrowContract {
         env: Env,
         program_id: String,
         authorized_payout_key: Address,
-        token_address: Address,
+        token_address: asset::AssetId,
     ) -> ProgramData {
         // Check if program already exists
         if env.storage().instance().has(&PROGRAM_DATA) {
             panic!("Program already initialized");
         }
+
+        let normalized_token_address = asset::normalize_asset_id(&env, &token_address)
+            .unwrap_or_else(|_| panic!("Invalid asset identifier: expected contract address"));
 
         let program_data = ProgramData {
             program_id: program_id.clone(),
@@ -66,7 +69,7 @@ impl ProgramEscrowContract {
             remaining_balance: 0,
             authorized_payout_key: authorized_payout_key.clone(),
             payout_history: vec![&env],
-            token_address: token_address.clone(),
+            token_address: normalized_token_address.clone(),
         };
 
         // Store program data
@@ -75,7 +78,7 @@ impl ProgramEscrowContract {
         // Emit ProgramInitialized event
         env.events().publish(
             (PROGRAM_INITIALIZED,),
-            (program_id, authorized_payout_key, token_address, 0i128),
+            (program_id, authorized_payout_key, normalized_token_address, 0i128),
         );
 
         program_data

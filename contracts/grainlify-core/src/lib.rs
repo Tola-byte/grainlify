@@ -1,4 +1,5 @@
 #![no_std]
+pub mod asset;
 pub mod nonce;
 
 use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env};

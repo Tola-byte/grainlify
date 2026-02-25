@@ -153,3 +153,21 @@ fn test_nonces_are_per_signer() {
     assert_eq!(contract.get_nonce(&signer_a), 0);
     assert_eq!(contract.get_nonce(&signer_b), 0);
 }
+
+#[test]
+#[should_panic(expected = "Invalid asset identifier")]
+fn test_init_rejects_non_contract_asset_identifier() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(ProgramEscrowContract, ());
+    let contract = ProgramEscrowContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let issuer_admin = Address::generate(&env);
+    let stellar_asset = env.register_stellar_asset_contract_v2(issuer_admin);
+    let invalid_asset_id = stellar_asset.issuer().address();
+    let program_id = String::from_str(&env, "invalid-asset-id");
+
+    contract.init_program(&program_id, &admin, &invalid_asset_id);
+}
