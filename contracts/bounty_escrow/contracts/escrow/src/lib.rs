@@ -1293,7 +1293,8 @@ impl BountyEscrowContract {
         amount: i128,
         deadline: u64,
     ) -> Result<(), Error> {
-        let res = Self::lock_funds_logic(env.clone(), depositor.clone(), bounty_id, amount, deadline);
+        let res =
+            Self::lock_funds_logic(env.clone(), depositor.clone(), bounty_id, amount, deadline);
         monitoring::track_operation(&env, symbol_short!("lock"), depositor, res.is_ok());
         res
     }
@@ -1944,7 +1945,12 @@ impl BountyEscrowContract {
     /// Refunds the full remaining_amount (accounts for any prior partial releases).
     pub fn refund(env: Env, bounty_id: u64) -> Result<(), Error> {
         let res = Self::refund_logic(env.clone(), bounty_id);
-        monitoring::track_operation(&env, symbol_short!("refund"), env.current_contract_address(), res.is_ok());
+        monitoring::track_operation(
+            &env,
+            symbol_short!("refund"),
+            env.current_contract_address(),
+            res.is_ok(),
+        );
         res
     }
 
