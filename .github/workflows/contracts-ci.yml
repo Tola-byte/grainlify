@@ -3,23 +3,23 @@ name: Smart Contracts CI/CD
 on:
   pull_request:
     paths:
-      - 'soroban/**'
-      - 'contracts/**'
-      - '.github/workflows/contracts-ci.yml'
+      - "soroban/**"
+      - "contracts/**"
+      - ".github/workflows/contracts-ci.yml"
   push:
     branches:
       - main
       - develop
     paths:
-      - 'soroban/**'
-      - 'contracts/**'
-      - '.github/workflows/contracts-ci.yml'
+      - "soroban/**"
+      - "contracts/**"
+      - ".github/workflows/contracts-ci.yml"
 
 jobs:
   contracts-ci:
     name: Format, Build, Test, and Stellar Build Check
     runs-on: macos-latest
-    
+
     defaults:
       run:
         working-directory: contracts/bounty_escrow
@@ -75,6 +75,12 @@ jobs:
           cd contracts/escrow
           cargo test --verbose --lib
 
+      - name: Run invariant checker tests
+        run: |
+          source $HOME/.cargo/env
+          cd contracts/escrow
+          cargo test --verbose --lib invariant_checker_ci
+
       - name: Build Soroban contract
         run: |
           source $HOME/.cargo/env
@@ -86,7 +92,7 @@ jobs:
           source $HOME/.cargo/env
           # Verify WASM files were generated
           echo "Checking for generated WASM files..."
-          wasm_file="target/wasm32v1-none/release/bounty_escrow.wasm"
+          wasm_file="$GITHUB_WORKSPACE/contracts/bounty_escrow/target/wasm32v1-none/release/bounty_escrow.wasm"
           if [ ! -f "$wasm_file" ]; then
             echo "Error: WASM file not found"
             echo "Expected: $wasm_file"
@@ -100,3 +106,31 @@ jobs:
           fi
           echo "Contract built successfully for Stellar/Soroban deployment"
 
+      - name: Run script tests
+        run: |
+          chmod +x ../scripts/test_deploy_failures.sh
+          chmod +x ../scripts/test_upgrade_failures.sh
+          ../scripts/test_deploy_failures.sh
+          ../scripts/test_upgrade_failures.sh
+
+  sdk-smoke-tests:
+    name: SDK Smoke Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          cd contracts/sdk
+          npm install
+
+      - name: Run smoke tests
+        run: |
+          cd contracts/sdk
+          npm run test:smoke
