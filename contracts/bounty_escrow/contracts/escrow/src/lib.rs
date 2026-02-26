@@ -2208,13 +2208,6 @@ impl BountyEscrowContract {
         let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
         let client = token::Client::new(&env, &token_addr);
 
-        // Transfer only the requested partial amount to the contributor
-        client.transfer(
-            &env.current_contract_address(),
-            &contributor,
-            &payout_amount,
-        );
-
         // Decrement remaining; this is always an exact integer subtraction — no rounding
         escrow.remaining_amount = escrow.remaining_amount.checked_sub(payout_amount).unwrap();
 
@@ -2226,9 +2219,7 @@ impl BountyEscrowContract {
             .persistent()
             .set(&DataKey::Escrow(bounty_id), &escrow);
 
-        // INTERACTION: external token transfer is last
-        let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
-        let client = token::Client::new(&env, &token_addr);
+        // INTERACTION: external token transfer is last (CEI pattern)
         client.transfer(
             &env.current_contract_address(),
             &contributor,
@@ -3410,8 +3401,6 @@ impl BountyEscrowContract {
                     deadline: item.deadline,
                 },
             );
-
-            locked_count = locked_count.checked_add(1).unwrap();
         }
 
         // Emit batch event
@@ -3556,8 +3545,6 @@ impl BountyEscrowContract {
                     timestamp,
                 },
             );
-
-            released_count = released_count.checked_add(1).unwrap();
         }
 
         // Emit batch event
